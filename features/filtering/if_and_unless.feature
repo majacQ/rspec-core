@@ -1,24 +1,24 @@
-Feature: :if and :unless
+Feature: Conditional Filters
 
   The `:if` and `:unless` metadata keys can be used to filter examples without
   needing to configure an exclusion filter.
 
-  Scenario: implicit :if filter
+  Scenario: Implicit `:if` filter
     Given a file named "implicit_if_filter_spec.rb" with:
       """ruby
-      describe ":if => true group", :if => true do
+      RSpec.describe ":if => true group", :if => true do
         it(":if => true group :if => true example", :if => true) { }
         it(":if => true group :if => false example", :if => false) { }
         it(":if => true group no :if example") { }
       end
 
-      describe ":if => false group", :if => false do
+      RSpec.describe ":if => false group", :if => false do
         it(":if => false group :if => true example", :if => true) { }
         it(":if => false group :if => false example", :if => false) { }
         it(":if => false group no :if example") { }
       end
 
-      describe "no :if group" do
+      RSpec.describe "no :if group" do
         it("no :if group :if => true example", :if => true) { }
         it("no :if group :if => false example", :if => false) { }
         it("no :if group no :if example") { }
@@ -37,22 +37,22 @@ Feature: :if and :unless
       | :if => false group no :if example       |
       | no :if group :if => false example       |
 
-  Scenario: implicit :unless filter
+  Scenario: Implicit `:unless` filter
     Given a file named "implicit_unless_filter_spec.rb" with:
       """ruby
-      describe ":unless => true group", :unless => true do
+      RSpec.describe ":unless => true group", :unless => true do
         it(":unless => true group :unless => true example", :unless => true) { }
         it(":unless => true group :unless => false example", :unless => false) { }
         it(":unless => true group no :unless example") { }
       end
 
-      describe ":unless => false group", :unless => false do
+      RSpec.describe ":unless => false group", :unless => false do
         it(":unless => false group :unless => true example", :unless => true) { }
         it(":unless => false group :unless => false example", :unless => false) { }
         it(":unless => false group no :unless example") { }
       end
 
-      describe "no :unless group" do
+      RSpec.describe "no :unless group" do
         it("no :unless group :unless => true example", :unless => true) { }
         it("no :unless group :unless => false example", :unless => false) { }
         it("no :unless group no :unless example") { }
@@ -71,14 +71,14 @@ Feature: :if and :unless
       | :unless => false group :unless => true example |
       | no :unless group :unless => true example       |
 
-  Scenario: combining implicit filter with explicit inclusion filter
+  Scenario: Combining implicit filter with explicit inclusion filter
     Given a file named "explicit_inclusion_filter_spec.rb" with:
       """ruby
       RSpec.configure do |c|
         c.filter_run :focus => true
       end
 
-      describe "group with :focus", :focus => true do
+      RSpec.describe "group with :focus", :focus => true do
         it("focused example") { }
         it("focused :if => true example", :if => true) { }
         it("focused :if => false example", :if => false) { }
@@ -86,7 +86,7 @@ Feature: :if and :unless
         it("focused :unless => false example", :unless => false) { }
       end
 
-      describe "group without :focus" do
+      RSpec.describe "group without :focus" do
         it("unfocused example") { }
         it("unfocused :if => true example", :if => true) { }
         it("unfocused :if => false example", :if => false) { }
@@ -104,14 +104,14 @@ Feature: :if and :unless
       | focused :unless => true example  |
       | unfocused                        |
 
-  Scenario: combining implicit filter with explicit exclusion filter
+  Scenario: Combining implicit filter with explicit exclusion filter
     Given a file named "explicit_exclusion_filter_spec.rb" with:
       """ruby
       RSpec.configure do |c|
         c.filter_run_excluding :broken => true
       end
 
-      describe "unbroken group" do
+      RSpec.describe "unbroken group" do
         it("included example") { }
         it("included :if => true example", :if => true) { }
         it("included :if => false example", :if => false) { }
@@ -119,7 +119,7 @@ Feature: :if and :unless
         it("included :unless => false example", :unless => false) { }
       end
 
-      describe "broken group", :broken => true do
+      RSpec.describe "broken group", :broken => true do
         it("excluded example") { }
         it("excluded :if => true example", :if => true) { }
         it("excluded :if => false example", :if => false) { }
@@ -137,32 +137,29 @@ Feature: :if and :unless
       | included :unless => true example  |
       | excluded                          |
 
-  Scenario: override implicit :if and :unless exclusion filters
-    Given a file named "override_implicit_filters_spec.rb" with:
+  Scenario: The :if and :unless exclusions stay in effect when there are explicit inclusions
+    Given a file named "if_and_unless_spec.rb" with:
       """ruby
-      RSpec.configure do |c|
-        c.filter_run_excluding :if => :exclude_me, :unless => :exclude_me_for_unless
-      end
+      RSpec.describe "Using inclusions" do
+        context "inclusion target" do
+          it "is filtered out by :if", :if => false do
+          end
 
-      describe ":if filtering" do
-        it(":if => true example", :if => true) { }
-        it(":if => false example", :if => false) { }
-        it(":if => :exclude_me example", :if => :exclude_me) { }
-      end
+          it 'is filtered out by :unless', :unless => true do
+          end
 
-      describe ":unless filtering" do
-        it(":unless => true example", :unless => true) { }
-        it(":unless => false example", :unless => false) { }
-        it(":unless => :exclude_me_for_unless example", :unless => :exclude_me_for_unless) { }
+          it 'is still run according to :if', :if => true do
+          end
+
+          it 'is still run according to :unless', :unless => false do
+          end
+        end
       end
       """
-    When I run `rspec override_implicit_filters_spec.rb --format doc`
+    When I run `rspec if_and_unless_spec.rb --format doc -e 'inclusion target'`
     Then the output should contain all of these:
-      | :if => true example      |
-      | :if => false example     |
-      | :unless => true example  |
-      | :unless => false example |
+      | is still run according to :if     |
+      | is still run according to :unless |
     And the output should not contain any of these:
-      | :if => :exclude_me example                |
-      | :unless => :exclude_me_for_unless example |
-
+      | is filtered out by :if         |
+      | is filtered out by :unless     |

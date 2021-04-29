@@ -1,12 +1,10 @@
 Feature: exclusion filters
 
-  You can exclude examples from a run by declaring an exclusion filter and
-  then tagging examples, or entire groups, with that filter.
+  You can exclude examples from a run by declaring an exclusion filter and then
+  tagging examples, or entire groups, with that filter. You can also specify
+  metadata using only symbols.
 
-  If you set the `treat_symbols_as_metadata_keys_with_true_values` config option
-  to `true`, you can specify metadata using only symbols.
-
-  Scenario: exclude an example
+  Scenario: Exclude an example
     Given a file named "spec/sample_spec.rb" with:
       """ruby
       RSpec.configure do |c|
@@ -14,7 +12,7 @@ Feature: exclusion filters
         c.filter_run_excluding :broken => true
       end
 
-      describe "something" do
+      RSpec.describe "something" do
         it "does one thing" do
         end
 
@@ -27,14 +25,14 @@ Feature: exclusion filters
     Then the output should contain "does one thing"
     And the output should not contain "does another thing"
 
-  Scenario: exclude a group
+  Scenario: Exclude a group
     Given a file named "spec/sample_spec.rb" with:
       """ruby
       RSpec.configure do |c|
         c.filter_run_excluding :broken => true
       end
 
-      describe "group 1", :broken => true do
+      RSpec.describe "group 1", :broken => true do
         it "group 1 example 1" do
         end
 
@@ -42,7 +40,7 @@ Feature: exclusion filters
         end
       end
 
-      describe "group 2" do
+      RSpec.describe "group 2" do
         it "group 2 example 1" do
         end
       end
@@ -52,15 +50,15 @@ Feature: exclusion filters
     And  the output should not contain "group 1 example 1"
     And  the output should not contain "group 1 example 2"
 
-  Scenario: exclude multiple groups
+  Scenario: Exclude multiple groups
     Given a file named "spec/sample_spec.rb" with:
       """ruby
       RSpec.configure do |c|
         c.filter_run_excluding :broken => true
       end
 
-      describe "group 1", :broken => true do
-        before(:all) do
+      RSpec.describe "group 1", :broken => true do
+        before(:context) do
           raise "you should not see me"
         end
 
@@ -71,8 +69,8 @@ Feature: exclusion filters
         end
       end
 
-      describe "group 2", :broken => true do
-        before(:each) do
+      RSpec.describe "group 2", :broken => true do
+        before(:example) do
           raise "you should not see me"
         end
 
@@ -85,24 +83,24 @@ Feature: exclusion filters
     And  the output should not contain "group 1"
     And  the output should not contain "group 2"
 
-  Scenario: before/after(:all) hooks in excluded example group are not run
-    Given a file named "spec/before_after_all_exclusion_filter_spec.rb" with:
+  Scenario: `before`/`after(:context)` hooks in excluded example group are not run
+    Given a file named "spec/before_after_context_exclusion_filter_spec.rb" with:
       """ruby
       RSpec.configure do |c|
         c.filter_run_excluding :broken => true
       end
 
-      describe "group 1" do
-        before(:all) { puts "before all in included group" }
-        after(:all)  { puts "after all in included group"  }
+      RSpec.describe "group 1" do
+        before(:context) { puts "before context in included group" }
+        after(:context)  { puts "after context in included group"  }
 
         it "group 1 example" do
         end
       end
 
-      describe "group 2", :broken => true do
-        before(:all) { puts "before all in excluded group" }
-        after(:all)  { puts "after all in excluded group"  }
+      RSpec.describe "group 2", :broken => true do
+        before(:context) { puts "before context in excluded group" }
+        after(:context)  { puts "after context in excluded group"  }
 
         context "context 1" do
           it "group 2 context 1 example 1" do
@@ -110,21 +108,20 @@ Feature: exclusion filters
         end
       end
       """
-    When I run `rspec ./spec/before_after_all_exclusion_filter_spec.rb`
-    Then the output should contain "before all in included group"
-     And the output should contain "after all in included group"
-     And the output should not contain "before all in excluded group"
-     And the output should not contain "after all in excluded group"
+    When I run `rspec ./spec/before_after_context_exclusion_filter_spec.rb`
+    Then the output should contain "before context in included group"
+     And the output should contain "after context in included group"
+     And the output should not contain "before context in excluded group"
+     And the output should not contain "after context in excluded group"
 
   Scenario: Use symbols as metadata
     Given a file named "symbols_as_metadata_spec.rb" with:
       """ruby
       RSpec.configure do |c|
-        c.treat_symbols_as_metadata_keys_with_true_values = true
         c.filter_run_excluding :broken
       end
 
-      describe "something" do
+      RSpec.describe "something" do
         it "does one thing" do
         end
 

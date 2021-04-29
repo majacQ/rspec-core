@@ -1,44 +1,140 @@
-require 'spec_helper'
+# encoding: utf-8
 require 'rspec/core/formatters/base_text_formatter'
 
-describe RSpec::Core::Formatters::BaseTextFormatter do
-  let(:output) { StringIO.new }
-  let(:formatter) { RSpec::Core::Formatters::BaseTextFormatter.new(output) }
+RSpec.describe RSpec::Core::Formatters::BaseTextFormatter do
+  include FormatterSupport
 
-  describe "#summary_line" do
-    it "with 0s outputs pluralized (excluding pending)" do
-      expect(formatter.summary_line(0,0,0)).to eq("0 examples, 0 failures")
+  context "when closing the formatter", :isolated_directory => true do
+    let(:output_to_close) { File.new("./output_to_close", "w") }
+    let(:formatter) { described_class.new(output_to_close) }
+
+    after do
+      # Windows appears to not let the `:isolated_directory` shared group
+      # cleanup if the file isn't closed.
+      output_to_close.close unless output_to_close.closed?
     end
 
-    it "with 1s outputs singular (including pending)" do
-      expect(formatter.summary_line(1,1,1)).to eq("1 example, 1 failure, 1 pending")
+    it 'does not error on an already closed output stream' do
+      output_to_close.close
+
+      expect { formatter.close(RSpec::Core::Notifications::NullNotification) }.not_to raise_error
     end
 
-    it "with 2s outputs pluralized (including pending)" do
-      expect(formatter.summary_line(2,2,2)).to eq("2 examples, 2 failures, 2 pending")
+    it "flushes output before closing the stream so buffered bytes are not lost if we exit right away" do
+      expect(output_to_close).to receive(:flush).ordered.and_call_original
+
+      formatter.close(RSpec::Core::Notifications::NullNotification)
+    end
+
+    it "does not close the stream so that it can be reused within a process" do
+      formatter.close(RSpec::Core::Notifications::NullNotification)
+      expect(output_to_close.closed?).to be(false)
     end
   end
 
-  describe "#dump_commands_to_rerun_failed_examples" do
-    it "includes command to re-run each failed example" do
-      group = RSpec::Core::ExampleGroup.describe("example group") do
-        it("fails") { fail }
+  describe "#dump_summary" do
+    it "with 0s outputs pluralized (excluding pending)" do
+      send_notification :dump_summary, summary_notification(0, [], [], [], 0)
+      expect(formatter_output.string).to match("0 examples, 0 failures")
+    end
+
+    it "with 1s outputs singular (including pending)" do
+      send_notification :dump_summary, summary_notification(0, examples(1), examples(1), examples(1), 0)
+      expect(formatter_output.string).to match("1 example, 1 failure, 1 pending")
+    end
+
+    it "with 1s outputs singular (only pending)" do
+      send_notification :dump_summary, summary_notification(1, examples(1), examples(0), examples(1), 0)
+      expect(formatter_output.string).to match("1 example, 0 failures, 1 pending")
+    end
+
+    it "with 2s outputs pluralized (including pending)" do
+      send_notification :dump_summary, summary_notification(2, examples(2), examples(2), examples(2), 0)
+      expect(formatter_output.string).to match("2 examples, 2 failures, 2 pending")
+    end
+
+    it 'with errors includes that count' do
+      send_notification :dump_summary, summary_notification(2, examples(2), examples(2), examples(2), 0, 3)
+      expect(formatter_output.string).to match("2 examples, 2 failures, 2 pending, 3 errors occurred outside of examples")
+    end
+
+    describe "rerun command for failed examples" do
+      it "uses the location to identify the example" do
+        line = __LINE__ + 2
+        example_group = RSpec.describe("example group") do
+          it("fails") { fail }
+        end
+
+        expect(output_from_running example_group).to include("rspec #{RSpec::Core::Metadata::relative_path("#{__FILE__}:#{line}")} # example group fails")
       end
-      line = __LINE__ - 2
-      group.run(formatter)
-      formatter.dump_commands_to_rerun_failed_examples
-      expect(output.string).to include("rspec #{RSpec::Core::Metadata::relative_path("#{__FILE__}:#{line}")} # example group fails")
+
+      context "for an example defined in an file required by the user rather than loaded by rspec" do
+        it "looks through ancestor metadata to find a workable re-run command" do
+          line = __LINE__ + 1
+          example_group = RSpec.describe("example group") do
+            # Using eval in order to make it think this got defined in an external file.
+            instance_eval "it('fails') { fail }", "some/external/file.rb", 1
+          end
+
+          expect(output_from_running example_group).to include("rspec #{RSpec::Core::Metadata::relative_path("#{__FILE__}:#{line}")} # example group fails")
+        end
+      end
+
+      context "for an example that is not uniquely identified by the location" do
+        let(:example_group_in_this_file) { example_group_defined_in(__FILE__) }
+
+        def example_group_defined_in(file)
+          instance_eval <<-EOS, file, 1
+            $group = RSpec.describe("example group") do
+              1.upto(2) do |i|
+                it("compares \#{i} against 2") { expect(i).to eq(2) }
+              end
+            end
+          EOS
+          $group
+        end
+
+        let(:id) { "#{RSpec::Core::Metadata::relative_path("#{__FILE__}")}[1:1]" }
+
+        it "uses the id instead" do
+          with_env_vars 'SHELL' => '/usr/local/bin/bash' do
+            expect(output_from_running example_group_in_this_file).to include("rspec #{id} # example group compares 1 against 2")
+          end
+        end
+
+        context "on a shell that may not handle unquoted ids" do
+          around { |ex| with_env_vars('SHELL' => '/usr/local/bin/cash', &ex) }
+
+          it 'quotes the id to be safe so the rerun command can be copied and pasted' do
+            expect(output_from_running example_group_in_this_file).to include("rspec '#{id}'")
+          end
+
+          it 'correctly escapes file names that have quotes in them' do
+            group_in_other_file = example_group_defined_in("./path/with'quote_spec.rb")
+            expect(output_from_running group_in_other_file).to include("rspec './path/with\\'quote_spec.rb[1:1]'")
+          end
+        end
+      end
+
+      def output_from_running(example_group)
+        allow(RSpec.configuration).to receive(:loaded_spec_files) { RSpec::Core::Set.new([File.expand_path(__FILE__)]) }
+        example_group.run(reporter)
+        examples = example_group.examples
+        failed   = examples.select { |e| e.execution_result.status == :failed }
+        send_notification :dump_summary, summary_notification(1, examples, failed, [], 0)
+        formatter_output.string
+      end
     end
   end
 
   describe "#dump_failures" do
-    let(:group) { RSpec::Core::ExampleGroup.describe("group name") }
+    let(:group) { RSpec.describe("group name") }
 
-    before { RSpec.configuration.stub(:color_enabled?) { false } }
+    before { allow(RSpec.configuration).to receive(:color_enabled?) { false } }
 
     def run_all_and_dump_failures
-      group.run(formatter)
-      formatter.dump_failures
+      group.run(reporter)
+      send_notification :dump_failures, failed_examples_notification
     end
 
     it "preserves formatting" do
@@ -46,16 +142,16 @@ describe RSpec::Core::Formatters::BaseTextFormatter do
 
       run_all_and_dump_failures
 
-      expect(output.string).to match /group name example name/m
-      expect(output.string).to match /(\s+)expected: \"that\"\n\1     got: \"this\"/m
+      expect(formatter_output.string).to match(/group name example name/m)
+      expect(formatter_output.string).to match(/(\s+)expected: \"that\"\n\1     got: \"this\"/m)
     end
 
     context "with an exception without a message" do
       it "does not throw NoMethodError" do
         exception_without_message = Exception.new()
-        exception_without_message.stub(:message) { nil }
+        allow(exception_without_message).to receive(:message) { nil }
         group.example("example name") { raise exception_without_message }
-        expect { run_all_and_dump_failures }.not_to raise_error(NoMethodError)
+        expect { run_all_and_dump_failures }.not_to raise_error
       end
 
       it "preserves ancestry" do
@@ -68,9 +164,9 @@ describe RSpec::Core::Formatters::BaseTextFormatter do
     context "with an exception that has an exception instance as its message" do
       it "does not raise NoMethodError" do
         gonzo_exception = RuntimeError.new
-        gonzo_exception.stub(:message) { gonzo_exception }
+        allow(gonzo_exception).to receive(:message) { gonzo_exception }
         group.example("example name") { raise gonzo_exception }
-        expect { run_all_and_dump_failures }.not_to raise_error(NoMethodError)
+        expect { run_all_and_dump_failures }.not_to raise_error
       end
     end
 
@@ -79,7 +175,7 @@ describe RSpec::Core::Formatters::BaseTextFormatter do
         exception = Class.new(StandardError).new
         group.example("example name") { raise exception }
         run_all_and_dump_failures
-        expect(output.string).to include('(anonymous error class)')
+        expect(formatter_output.string).to include('(anonymous error class)')
       end
     end
 
@@ -87,7 +183,17 @@ describe RSpec::Core::Formatters::BaseTextFormatter do
       it "does not show the error class" do
         group.example("example name") { raise NameError.new('foo') }
         run_all_and_dump_failures
-        expect(output.string).to match /NameError/m
+        expect(formatter_output.string).to match(/NameError/m)
+      end
+    end
+
+    if String.method_defined?(:encoding)
+      context "with an exception that has a differently encoded message" do
+        it "runs without encountering an encoding exception" do
+          group.example("Mixing encodings, e.g. UTF-8: © and Binary") { raise "Error: \xC2\xA9".dup.force_encoding("ASCII-8BIT") }
+          run_all_and_dump_failures
+          expect(formatter_output.string).to match(/RuntimeError:\n\s+Error: \?\?/m) # ?? because the characters dont encode properly
+        end
       end
     end
 
@@ -95,335 +201,96 @@ describe RSpec::Core::Formatters::BaseTextFormatter do
       it "does not show the error class" do
         group.example("example name") { expect("this").to eq("that") }
         run_all_and_dump_failures
-        expect(output.string).not_to match /RSpec/m
+        expect(formatter_output.string).not_to match(/RSpec/m)
       end
     end
 
     context "with a failed message expectation (rspec-mocks)" do
       it "does not show the error class" do
-        group.example("example name") { "this".should_receive("that") }
+        group.example("example name") { expect("this").to receive("that") }
         run_all_and_dump_failures
-        expect(output.string).not_to match /RSpec/m
+        expect(formatter_output.string).not_to match(/RSpec/m)
       end
     end
 
-    context 'for #share_examples_for' do
-      it 'outputs the name and location' do
-
-        share_examples_for 'foo bar' do
-          it("example name") { expect("this").to eq("that") }
-        end
-
-        line = __LINE__.next
-        group.it_should_behave_like('foo bar')
-
-        run_all_and_dump_failures
-
-        expect(output.string).to include(
-          'Shared Example Group: "foo bar" called from ' +
-            "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-        )
-      end
-
-      context 'that contains nested example groups' do
+    %w[ include_examples it_should_behave_like ].each do |inclusion_method|
+      context "for #shared_examples included using #{inclusion_method}" do
         it 'outputs the name and location' do
-          share_examples_for 'foo bar' do
-            describe 'nested group' do
-              it("example name") { expect("this").to eq("that") }
-            end
+          group.shared_examples 'foo bar' do
+            it("example name") { expect("this").to eq("that") }
           end
 
           line = __LINE__.next
-          group.it_should_behave_like('foo bar')
+          group.__send__(inclusion_method, 'foo bar')
 
           run_all_and_dump_failures
 
-          expect(output.string).to include(
+          expect(formatter_output.string.lines).to include(a_string_ending_with(
             'Shared Example Group: "foo bar" called from ' +
-              "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-          )
-        end
-      end
-    end
-
-    context 'for #share_as' do
-      before { RSpec.stub(:warn) }
-
-      it 'outputs the name and location' do
-
-        share_as :FooBar do
-          it("example name") { expect("this").to eq("that") }
+              "#{RSpec::Core::Metadata.relative_path(__FILE__)}:#{line}\n"
+          ))
         end
 
-        line = __LINE__.next
-        group.send(:include, FooBar)
-
-        run_all_and_dump_failures
-
-        expect(output.string).to include(
-          'Shared Example Group: "FooBar" called from ' +
-            "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-        )
-      end
-
-      context 'that contains nested example groups' do
-        it 'outputs the name and location' do
-
-          share_as :NestedFoo do
-            describe 'nested group' do
-              describe 'hell' do
+        context 'that contains nested example groups' do
+          it 'outputs the name and location' do
+            group.shared_examples 'foo bar' do
+              describe 'nested group' do
                 it("example name") { expect("this").to eq("that") }
               end
             end
-          end
-
-          line = __LINE__.next
-          group.send(:include, NestedFoo)
-
-          run_all_and_dump_failures
-
-          expect(output.string).to include(
-            'Shared Example Group: "NestedFoo" called from ' +
-              "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-          )
-        end
-      end
-    end
-  end
-
-  describe "#dump_pending" do
-    let(:group) { RSpec::Core::ExampleGroup.describe("group name") }
-
-    before { RSpec.configuration.stub(:color_enabled?) { false } }
-
-    def run_all_and_dump_pending
-      group.run(formatter)
-      formatter.dump_pending
-    end
-
-    context "with show_failures_in_pending_blocks setting enabled" do
-      before { RSpec.configuration.stub(:show_failures_in_pending_blocks?) { true } }
-
-      it "preserves formatting" do
-        group.example("example name") { pending { expect("this").to eq("that") } }
-
-        run_all_and_dump_pending
-
-        expect(output.string).to match /group name example name/m
-        expect(output.string).to match /(\s+)expected: \"that\"\n\1     got: \"this\"/m
-      end
-
-      context "with an exception without a message" do
-        it "does not throw NoMethodError" do
-          exception_without_message = Exception.new()
-          exception_without_message.stub(:message) { nil }
-          group.example("example name") { pending { raise exception_without_message } }
-          expect { run_all_and_dump_pending }.not_to raise_error(NoMethodError)
-        end
-      end
-
-      context "with an exception class other than RSpec" do
-        it "does not show the error class" do
-          group.example("example name") { pending { raise NameError.new('foo') } }
-          run_all_and_dump_pending
-          expect(output.string).to match /NameError/m
-        end
-      end
-
-      context "with a failed expectation (rspec-expectations)" do
-        it "does not show the error class" do
-          group.example("example name") { pending { expect("this").to eq("that") } }
-          run_all_and_dump_pending
-          expect(output.string).not_to match /RSpec/m
-        end
-      end
-
-      context "with a failed message expectation (rspec-mocks)" do
-        it "does not show the error class" do
-          group.example("example name") { pending { "this".should_receive("that") } }
-          run_all_and_dump_pending
-          expect(output.string).not_to match /RSpec/m
-        end
-      end
-
-      context 'for #share_examples_for' do
-        it 'outputs the name and location' do
-
-          share_examples_for 'foo bar' do
-            it("example name") { pending { expect("this").to eq("that") } }
-          end
-
-          line = __LINE__.next
-          group.it_should_behave_like('foo bar')
-
-          run_all_and_dump_pending
-
-          expect(output.string).to include(
-            'Shared Example Group: "foo bar" called from ' +
-            "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-          )
-        end
-
-        context 'that contains nested example groups' do
-          it 'outputs the name and location' do
-            share_examples_for 'foo bar' do
-              describe 'nested group' do
-                it("example name") { pending { expect("this").to eq("that") } }
-              end
-            end
 
             line = __LINE__.next
-            group.it_should_behave_like('foo bar')
+            group.__send__(inclusion_method, 'foo bar')
 
-            run_all_and_dump_pending
+            run_all_and_dump_failures
 
-            expect(output.string).to include(
+            expect(formatter_output.string.lines).to include(a_string_ending_with(
               'Shared Example Group: "foo bar" called from ' +
-              "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-            )
+                "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}\n"
+            ))
           end
         end
-      end
 
-      context 'for #share_as' do
-        before { RSpec.stub(:warn) }
-
-        it 'outputs the name and location' do
-
-          share_as :FooBar2 do
-            it("example name") { pending { expect("this").to eq("that") } }
-          end
-
-          line = __LINE__.next
-          group.send(:include, FooBar2)
-
-          run_all_and_dump_pending
-
-          expect(output.string).to include(
-            'Shared Example Group: "FooBar2" called from ' +
-            "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-          )
-        end
-
-        context 'that contains nested example groups' do
-          it 'outputs the name and location' do
-
-            share_as :NestedFoo2 do
-              describe 'nested group' do
-                describe 'hell' do
-                  it("example name") { pending { expect("this").to eq("that") } }
-                end
-              end
+        context "that contains shared group nesting" do
+          it 'includes each inclusion location in the output' do
+            group.shared_examples "inner" do
+              example { expect(1).to eq(2) }
             end
 
-            line = __LINE__.next
-            group.send(:include, NestedFoo2)
+            inner_line = __LINE__ + 2
+            group.shared_examples "outer" do
+              __send__(inclusion_method, "inner")
+            end
 
-            run_all_and_dump_pending
+            outer_line = __LINE__ + 1
+            group.__send__(inclusion_method, 'outer')
 
-            expect(output.string).to include(
-              'Shared Example Group: "NestedFoo2" called from ' +
-              "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{line}"
-            )
+            run_all_and_dump_failures
+
+            expect(formatter_output.string.lines.grep(/Shared Example Group/)).to match [
+              a_string_ending_with(
+                'Shared Example Group: "inner" called from ' +
+                  "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{inner_line}\n"
+              ),
+              a_string_ending_with(
+                'Shared Example Group: "outer" called from ' +
+                  "./spec/rspec/core/formatters/base_text_formatter_spec.rb:#{outer_line}\n"
+              ),
+            ]
           end
         end
       end
-    end
-
-    context "with show_failures_in_pending_blocks setting disabled" do
-      before { RSpec.configuration.stub(:show_failures_in_pending_blocks?) { false } }
-
-      it "does not output the failure information" do
-        group.example("example name") { pending { expect("this").to eq("that") } }
-        run_all_and_dump_pending
-        expect(output.string).not_to match /(\s+)expected: \"that\"\n\1     got: \"this\"/m
-      end
-    end
-  end
-
-  describe "#dump_profile" do
-    example_line_number = nil
-
-    before do
-      group = RSpec::Core::ExampleGroup.describe("group") do
-        # Use a sleep so there is some measurable time, to ensure
-        # the reported percent is 100%, not 0%.
-        example("example") { sleep 0.001 }
-        example_line_number = __LINE__ - 1
-      end
-      group.run(double('reporter').as_null_object)
-
-      formatter.stub(:examples) { group.examples }
-      RSpec.configuration.stub(:profile_examples) { 10 }
-    end
-
-    it "names the example" do
-      formatter.dump_profile
-      expect(output.string).to match /group example/m
-    end
-
-    it "prints the time" do
-      formatter.dump_profile
-      expect(output.string).to match /0(\.\d+)? seconds/
-    end
-
-    it "prints the path" do
-      formatter.dump_profile
-      filename = __FILE__.split(File::SEPARATOR).last
-
-      expect(output.string).to match /#{filename}\:#{example_line_number}/
-    end
-
-    it "prints the percentage taken from the total runtime" do
-      formatter.dump_profile
-      expect(output.string).to match /, 100.0% of total time\):/
     end
   end
 
   describe "custom_colors" do
     it "uses the custom success color" do
       RSpec.configure do |config|
-        config.color_enabled = true
-        config.tty = true
+        config.color_mode = :on
         config.success_color = :cyan
       end
-      formatter.dump_summary(0,1,0,0)
-      expect(output.string).to include("\e[36m")
+      send_notification :dump_summary, summary_notification(0, examples(1), [], [], 0)
+      expect(formatter_output.string).to include("\e[36m")
     end
   end
-
-  describe "#colorize" do
-    it "accepts a VT100 integer code and formats the text with it" do
-       expect(formatter.colorize('abc', 32)).to eq "\e[32mabc\e[0m"
-    end
-
-    it "accepts a symbol as a color parameter and translates it to the correct integer code, then formats the text with it" do
-       expect(formatter.colorize('abc', :green)).to eq "\e[32mabc\e[0m"
-    end
-
-    it "accepts a non-default color symbol as a parameter and translates it to the correct integer code, then formats the text with it" do
-       expect(formatter.colorize('abc', :cyan)).to eq "\e[36mabc\e[0m"
-    end
-  end
-
-  described_class::VT100_COLORS.each do |name, number|
-    next if name == :black
-
-    describe "##{name}" do
-      before do
-        RSpec.configuration.stub(:color_enabled?) { true }
-        RSpec.stub(:warn)
-      end
-
-      it "prints the text using the color code for #{name}" do
-        expect(formatter.send(name, "text")).to eq("\e[#{number}mtext\e[0m")
-      end
-
-      it "prints a deprecation warning" do
-        RSpec.should_receive(:warn).with(/#{name}/)
-        formatter.send(name, "text")
-      end
-    end
-  end
-
 end

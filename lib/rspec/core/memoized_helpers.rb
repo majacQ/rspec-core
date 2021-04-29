@@ -1,10 +1,18 @@
+RSpec::Support.require_rspec_support 'reentrant_mutex'
+
 module RSpec
   module Core
+    # This module is included in {ExampleGroup}, making the methods
+    # available to be called from within example blocks.
+    #
+    # @see ClassMethods
     module MemoizedHelpers
       # @note `subject` was contributed by Joe Ferris to support the one-liner
       #   syntax embraced by shoulda matchers:
       #
-      #       describe Widget do
+      #       RSpec.describe Widget do
+      #         it { is_expected.to validate_presence_of(:name) }
+      #         # or
       #         it { should validate_presence_of(:name) }
       #       end
       #
@@ -14,8 +22,8 @@ module RSpec
       #
       # @example
       #
-      #   # explicit declaration of subject
-      #   describe Person do
+      #   # Explicit declaration of subject.
+      #   RSpec.describe Person do
       #     subject { Person.new(:birthdate => 19.years.ago) }
       #     it "should be eligible to vote" do
       #       subject.should be_eligible_to_vote
@@ -23,30 +31,34 @@ module RSpec
       #     end
       #   end
       #
-      #   # implicit subject => { Person.new }
-      #   describe Person do
+      #   # Implicit subject => { Person.new }.
+      #   RSpec.describe Person do
       #     it "should be eligible to vote" do
       #       subject.should be_eligible_to_vote
       #       # ^ ^ explicit reference to subject not recommended
       #     end
       #   end
       #
-      #   # one-liner syntax - should is invoked on subject
-      #   describe Person do
+      #   # One-liner syntax - expectation is set on the subject.
+      #   RSpec.describe Person do
+      #     it { is_expected.to be_eligible_to_vote }
+      #     # or
       #     it { should be_eligible_to_vote }
       #   end
       #
-      # @note Because `subject` is designed to create state that is reset between
-      #   each example, and `before(:all)` is designed to setup state that is
-      #   shared across _all_ examples in an example group, `subject` is _not_
-      #   intended to be used in a `before(:all)` hook. RSpec 2.13.1 prints
-      #   a warning when you reference a `subject` from `before(:all)` and we plan
-      #   to have it raise an error in RSpec 3.
+      # @note Because `subject` is designed to create state that is reset
+      #   between each example, and `before(:context)` is designed to setup
+      #   state that is shared across _all_ examples in an example group,
+      #   `subject` is _not_ intended to be used in a `before(:context)` hook.
       #
       # @see #should
+      # @see #should_not
+      # @see #is_expected
       def subject
-        raise NotImplementedError, 'This definition is here for documentation purposes only'
-          ' - it is overriden anyway below when this module gets included.'
+        __memoized.fetch_or_store(:subject) do
+          described = described_class || self.class.metadata.fetch(:description_args).first
+          Class === described ? described.new : described
+        end
       end
 
       # When `should` is called with no explicit receiver, the call is
@@ -55,12 +67,18 @@ module RSpec
       #
       # @example
       #
-      #   describe Person do
+      #   RSpec.describe Person do
       #     it { should be_eligible_to_vote }
       #   end
       #
       # @see #subject
+      # @see #is_expected
+      #
+      # @note This only works if you are using rspec-expectations.
+      # @note If you are using RSpec's newer expect-based syntax you may
+      #       want to use `is_expected.to` instead of `should`.
       def should(matcher=nil, message=nil)
+        enforce_value_expectation(matcher, 'should')
         RSpec::Expectations::PositiveExpectationHandler.handle_matcher(subject, matcher, message)
       end
 
@@ -69,92 +87,190 @@ module RSpec
       #
       # @example
       #
-      #   describe Person do
+      #   RSpec.describe Person do
       #     it { should_not be_eligible_to_vote }
       #   end
       #
       # @see #subject
+      # @see #is_expected
+      #
+      # @note This only works if you are using rspec-expectations.
+      # @note If you are using RSpec's newer expect-based syntax you may
+      #       want to use `is_expected.to_not` instead of `should_not`.
       def should_not(matcher=nil, message=nil)
+        enforce_value_expectation(matcher, 'should_not')
         RSpec::Expectations::NegativeExpectationHandler.handle_matcher(subject, matcher, message)
       end
 
-      private
+      # Wraps the `subject` in `expect` to make it the target of an expectation.
+      # Designed to read nicely for one-liners.
+      #
+      # @example
+      #
+      #   describe [1, 2, 3] do
+      #     it { is_expected.to be_an Array }
+      #     it { is_expected.not_to include 4 }
+      #   end
+      #
+      # @see #subject
+      # @see #should
+      # @see #should_not
+      #
+      # @note This only works if you are using rspec-expectations.
+      def is_expected
+        expect(subject)
+      end
 
       # @private
-      def __memoized
-        @__memoized ||= {}
+      # should just be placed in private section,
+      # but Ruby issues warnings on private attributes.
+      # and expanding it to the equivalent method upsets Rubocop,
+      # b/c it should obviously be a reader
+      attr_reader :__memoized
+      private :__memoized
+
+    private
+
+      # @private
+      def initialize(*)
+        __init_memoized
+        super
+      end
+
+      # @private
+      def __init_memoized
+        @__memoized = if RSpec.configuration.threadsafe?
+                        ThreadsafeMemoized.new
+                      else
+                        NonThreadSafeMemoized.new
+                      end
+      end
+
+      # @private
+      def enforce_value_expectation(matcher, method_name)
+        return if matcher_supports_value_expectations?(matcher)
+
+        RSpec.deprecate(
+          "#{method_name} #{RSpec::Support::ObjectFormatter.format(matcher)}",
+          :message =>
+            "The implicit block expectation syntax is deprecated, you should pass " \
+            "a block to `expect` to use the provided block expectation matcher " \
+            "(#{RSpec::Support::ObjectFormatter.format(matcher)}), " \
+            "or the matcher must implement `supports_value_expectations?`."
+        )
+      end
+
+      def matcher_supports_value_expectations?(matcher)
+        matcher.supports_value_expectations?
+      rescue
+        true
+      end
+
+      # @private
+      class ThreadsafeMemoized
+        def initialize
+          @memoized = {}
+          @mutex = Support::ReentrantMutex.new
+        end
+
+        def fetch_or_store(key)
+          @memoized.fetch(key) do # only first access pays for synchronization
+            @mutex.synchronize do
+              @memoized.fetch(key) { @memoized[key] = yield }
+            end
+          end
+        end
+      end
+
+      # @private
+      class NonThreadSafeMemoized
+        def initialize
+          @memoized = {}
+        end
+
+        def fetch_or_store(key)
+          @memoized.fetch(key) { @memoized[key] = yield }
+        end
       end
 
       # Used internally to customize the behavior of the
-      # memoized hash when used in a `before(:all)` hook.
+      # memoized hash when used in a `before(:context)` hook.
       #
       # @private
-      class BeforeAllMemoizedHash
-        def initialize(example_group_instance)
-          @example_group_instance = example_group_instance
-          @hash = {}
-        end
+      class ContextHookMemoized
+        def self.isolate_for_context_hook(example_group_instance)
+          exploding_memoized = self
 
-        def self.isolate_for_before_all(example_group_instance)
-          example_group_instance.instance_eval do
-            @__memoized = BeforeAllMemoizedHash.new(self)
+          example_group_instance.instance_exec do
+            @__memoized = exploding_memoized
 
             begin
               yield
             ensure
-              @__memoized.preserve_accessed_lets
-              @__memoized = nil
+              # This is doing a reset instead of just isolating for context hook.
+              # Really, this should set the old @__memoized back into place.
+              #
+              # Caller is the before and after context hooks
+              # which are both called from self.run
+              # I didn't look at why it made tests fail, maybe an object was getting reused in RSpec tests,
+              # if so, then that probably already works, and its the tests that are wrong.
+              __init_memoized
             end
           end
         end
 
-        def fetch(key, &block)
+        def self.fetch_or_store(key, &_block)
           description = if key == :subject
-            "subject"
-          else
-            "let declaration `#{key}`"
-          end
+                          "subject"
+                        else
+                          "let declaration `#{key}`"
+                        end
 
-          ::RSpec.warn_deprecation <<-EOS
-WARNING: #{description} accessed in a `before(:all)` hook at:
-  #{caller[1]}
-
-This is deprecated behavior that will not be supported in RSpec 3.
+          raise <<-EOS
+#{description} accessed in #{article} #{hook_expression} hook at:
+  #{CallerFilter.first_non_rspec_line}
 
 `let` and `subject` declarations are not intended to be called
-in a `before(:all)` hook, as they exist to define state that
-is reset between each example, while `before(:all)` exists to
-define state that is shared across examples in an example group.
+in #{article} #{hook_expression} hook, as they exist to define state that
+is reset between each example, while #{hook_expression} exists to
+#{hook_intention}.
 EOS
-
-          @hash.fetch(key, &block)
         end
 
-        def []=(key, value)
-          @hash[key] = value
+        # @private
+        class Before < self
+          def self.hook_expression
+            "`before(:context)`"
+          end
+
+          def self.article
+            "a"
+          end
+
+          def self.hook_intention
+            "define state that is shared across examples in an example group"
+          end
         end
 
-        def preserve_accessed_lets
-          hash = @hash
+        # @private
+        class After < self
+          def self.hook_expression
+            "`after(:context)`"
+          end
 
-          @example_group_instance.class.class_eval do
-            hash.each do |key, value|
-              define_method(key) { value }
-            end
+          def self.article
+            "an"
+          end
+
+          def self.hook_intention
+            "cleanup state that is shared across examples in an example group"
           end
         end
       end
 
-      def self.included(mod)
-        mod.extend(ClassMethods)
-
-        # This logic defines an implicit subject
-        mod.subject do
-          described = described_class || self.class.description
-          Class === described ? described.new : described
-        end
-      end
-
+      # This module is extended onto {ExampleGroup}, making the methods
+      # available to be called from within example group blocks.
+      # You can think of them as being analagous to class macros.
       module ClassMethods
         # Generates a method whose return value is memoized after the first
         # call. Useful for reducing duplication between examples that assign
@@ -164,27 +280,26 @@ EOS
         #   maybe 3 declarations) in any given example group, but that can
         #   quickly degrade with overuse. YMMV.
         #
-        # @note `let` uses an `||=` conditional that has the potential to
-        #   behave in surprising ways in examples that spawn separate threads,
-        #   though we have yet to see this in practice. You've been warned.
+        # @note `let` can be configured to be threadsafe or not.
+        #   If it is threadsafe, it will take longer to access the value.
+        #   If it is not threadsafe, it may behave in surprising ways in examples
+        #   that spawn separate threads. Specify this on `RSpec.configure`
         #
         # @note Because `let` is designed to create state that is reset between
-        #   each example, and `before(:all)` is designed to setup state that is
-        #   shared across _all_ examples in an example group, `let` is _not_
-        #   intended to be used in a `before(:all)` hook. RSpec 2.13.1 prints
-        #   a warning when you reference a `let` from `before(:all)` and we plan
-        #   to have it raise an error in RSpec 3.
+        #   each example, and `before(:context)` is designed to setup state that
+        #   is shared across _all_ examples in an example group, `let` is _not_
+        #   intended to be used in a `before(:context)` hook.
         #
         # @example
         #
-        #   describe Thing do
+        #   RSpec.describe Thing do
         #     let(:thing) { Thing.new }
         #
         #     it "does something" do
-        #       # first invocation, executes block, memoizes and returns result
+        #       # First invocation, executes block, memoizes and returns result.
         #       thing.do_something
         #
-        #       # second invocation, returns the memoized value
+        #       # Second invocation, returns the memoized value.
         #       thing.should be_something
         #     end
         #   end
@@ -192,12 +307,40 @@ EOS
           # We have to pass the block directly to `define_method` to
           # allow it to use method constructs like `super` and `return`.
           raise "#let or #subject called without a block" if block.nil?
-          MemoizedHelpers.module_for(self).send(:define_method, name, &block)
+
+          # A list of reserved words that can't be used as a name for a memoized helper
+          # Matches for both symbols and passed strings
+          if [:initialize, :to_s].include?(name.to_sym)
+            raise ArgumentError, "#let or #subject called with reserved name `#{name}`"
+          end
+
+          our_module = MemoizedHelpers.module_for(self)
+
+          # If we have a module clash in our helper module
+          # then we need to remove it to prevent a warning.
+          #
+          # Note we do not check ancestor modules (see: `instance_methods(false)`)
+          # as we can override them.
+          if our_module.instance_methods(false).include?(name)
+            our_module.__send__(:remove_method, name)
+          end
+          our_module.__send__(:define_method, name, &block)
+
+          # If we have a module clash in the example module
+          # then we need to remove it to prevent a warning.
+          #
+          # Note we do not check ancestor modules (see: `instance_methods(false)`)
+          # as we can override them.
+          if instance_methods(false).include?(name)
+            remove_method(name)
+          end
 
           # Apply the memoization. The method has been defined in an ancestor
           # module so we can use `super` here to get the value.
-          define_method(name) do
-            __memoized.fetch(name) { |k| __memoized[k] = super(&nil) }
+          if block.arity == 1
+            define_method(name) { __memoized.fetch_or_store(name) { super(RSpec.current_example, &nil) } }
+          else
+            define_method(name) { __memoized.fetch_or_store(name) { super(&nil) } }
           end
         end
 
@@ -225,8 +368,8 @@ EOS
         #     end
         #   end
         #
-        #   describe Thing do
-        #     after(:each) { Thing.reset_count }
+        #   RSpec.describe Thing do
+        #     after(:example) { Thing.reset_count }
         #
         #     context "using let" do
         #       let(:thing) { Thing.new }
@@ -259,41 +402,51 @@ EOS
           before { __send__(name) }
         end
 
-        # Declares a `subject` for an example group which can then be the
-        # implicit receiver (through delegation) of calls to `should`.
+        # Declares a `subject` for an example group which can then be wrapped
+        # with `expect` using `is_expected` to make it the target of an
+        # expectation in a concise, one-line example.
         #
         # Given a `name`, defines a method with that name which returns the
         # `subject`. This lets you declare the subject once and access it
         # implicitly in one-liners and explicitly using an intention revealing
         # name.
         #
-        # @param [String,Symbol] name used to define an accessor with an
+        # When given a `name`, calling `super` in the block is not supported.
+        #
+        # @note `subject` can be configured to be threadsafe or not.
+        #   If it is threadsafe, it will take longer to access the value.
+        #   If it is not threadsafe, it may behave in surprising ways in examples
+        #   that spawn separate threads. Specify this on `RSpec.configure`
+        #
+        # @param name [String,Symbol] used to define an accessor with an
         #   intention revealing name
         # @param block defines the value to be returned by `subject` in examples
         #
         # @example
         #
-        #   describe CheckingAccount, "with $50" do
+        #   RSpec.describe CheckingAccount, "with $50" do
         #     subject { CheckingAccount.new(Money.new(50, :USD)) }
-        #     it { should have_a_balance_of(Money.new(50, :USD)) }
-        #     it { should_not be_overdrawn }
+        #     it { is_expected.to have_a_balance_of(Money.new(50, :USD)) }
+        #     it { is_expected.not_to be_overdrawn }
         #   end
         #
-        #   describe CheckingAccount, "with a non-zero starting balance" do
+        #   RSpec.describe CheckingAccount, "with a non-zero starting balance" do
         #     subject(:account) { CheckingAccount.new(Money.new(50, :USD)) }
-        #     it { should_not be_overdrawn }
+        #     it { is_expected.not_to be_overdrawn }
         #     it "has a balance equal to the starting balance" do
         #       account.balance.should eq(Money.new(50, :USD))
         #     end
         #   end
         #
         # @see MemoizedHelpers#should
+        # @see MemoizedHelpers#should_not
+        # @see MemoizedHelpers#is_expected
         def subject(name=nil, &block)
           if name
             let(name, &block)
             alias_method :subject, name
 
-            self::NamedSubjectPreventSuper.send(:define_method, name) do
+            self::NamedSubjectPreventSuper.__send__(:define_method, name) do
               raise NotImplementedError, "`super` in named subjects is not supported"
             end
           else
@@ -301,9 +454,9 @@ EOS
           end
         end
 
-        # Just like `subject`, except the block is invoked by an implicit `before`
-        # hook. This serves a dual purpose of setting up state and providing a
-        # memoized reference to that state.
+        # Just like `subject`, except the block is invoked by an implicit
+        # `before` hook. This serves a dual purpose of setting up state and
+        # providing a memoized reference to that state.
         #
         # @example
         #
@@ -325,8 +478,8 @@ EOS
         #     end
         #   end
         #
-        #   describe Thing do
-        #     after(:each) { Thing.reset_count }
+        #   RSpec.describe Thing do
+        #     after(:example) { Thing.reset_count }
         #
         #     context "using subject" do
         #       subject { Thing.new }
@@ -358,99 +511,9 @@ EOS
           subject(name, &block)
           before { subject }
         end
-
-        # Creates a nested example group named by the submitted `attribute`,
-        # and then generates an example using the submitted block.
-        #
-        # @example
-        #
-        #   # This ...
-        #   describe Array do
-        #     its(:size) { should eq(0) }
-        #   end
-        #
-        #   # ... generates the same runtime structure as this:
-        #   describe Array do
-        #     describe "size" do
-        #       it "should eq(0)" do
-        #         subject.size.should eq(0)
-        #       end
-        #     end
-        #   end
-        #
-        # The attribute can be a `Symbol` or a `String`. Given a `String`
-        # with dots, the result is as though you concatenated that `String`
-        # onto the subject in an expression.
-        #
-        # @example
-        #
-        #   describe Person do
-        #     subject do
-        #       Person.new.tap do |person|
-        #         person.phone_numbers << "555-1212"
-        #       end
-        #     end
-        #
-        #     its("phone_numbers.first") { should eq("555-1212") }
-        #   end
-        #
-        # When the subject is a `Hash`, you can refer to the Hash keys by
-        # specifying a `Symbol` or `String` in an array.
-        #
-        # @example
-        #
-        #   describe "a configuration Hash" do
-        #     subject do
-        #       { :max_users => 3,
-        #         'admin' => :all_permissions }
-        #     end
-        #
-        #     its([:max_users]) { should eq(3) }
-        #     its(['admin']) { should eq(:all_permissions) }
-        #
-        #     # You can still access to its regular methods this way:
-        #     its(:keys) { should include(:max_users) }
-        #     its(:count) { should eq(2) }
-        #   end
-        #
-        # Note that this method does not modify `subject` in any way, so if you
-        # refer to `subject` in `let` or `before` blocks, you're still
-        # referring to the outer subject.
-        #
-        # @example
-        #
-        #   describe Person do
-        #     subject { Person.new }
-        #     before { subject.age = 25 }
-        #     its(:age) { should eq(25) }
-        #   end
-        def its(attribute, &block)
-          describe(attribute) do
-            if Array === attribute
-              let(:__its_subject) { subject[*attribute] }
-            else
-              let(:__its_subject) do
-                attribute_chain = attribute.to_s.split('.')
-                attribute_chain.inject(subject) do |inner_subject, attr|
-                  inner_subject.send(attr)
-                end
-              end
-            end
-
-            def should(matcher=nil, message=nil)
-              RSpec::Expectations::PositiveExpectationHandler.handle_matcher(__its_subject, matcher, message)
-            end
-
-            def should_not(matcher=nil, message=nil)
-              RSpec::Expectations::NegativeExpectationHandler.handle_matcher(__its_subject, matcher, message)
-            end
-
-            example(&block)
-          end
-        end
       end
 
-      # @api private
+      # @private
       #
       # Gets the LetDefinitions module. The module is mixed into
       # the example group and is used to hold all let definitions.
@@ -465,23 +528,28 @@ EOS
       def self.module_for(example_group)
         get_constant_or_yield(example_group, :LetDefinitions) do
           mod = Module.new do
-            include Module.new {
+            include(Module.new {
               example_group.const_set(:NamedSubjectPreventSuper, self)
-            }
+            })
           end
 
-          example_group.__send__(:include, mod)
           example_group.const_set(:LetDefinitions, mod)
           mod
         end
       end
 
+      # @private
+      def self.define_helpers_on(example_group)
+        example_group.__send__(:include, module_for(example_group))
+      end
+
       if Module.method(:const_defined?).arity == 1 # for 1.8
-        # @api private
+        # @private
         #
         # Gets the named constant or yields.
         # On 1.8, const_defined? / const_get do not take into
         # account the inheritance hierarchy.
+        # :nocov:
         def self.get_constant_or_yield(example_group, name)
           if example_group.const_defined?(name)
             example_group.const_get(name)
@@ -489,8 +557,9 @@ EOS
             yield
           end
         end
+        # :nocov:
       else
-        # @api private
+        # @private
         #
         # Gets the named constant or yields.
         # On 1.9, const_defined? / const_get take into account the
