@@ -1,5 +1,3 @@
-require 'spec_helper'
-
 module RSpec::Matchers
   def __method_with_super
     super
@@ -14,7 +12,7 @@ module RSpec::Matchers
     c.include ModThatIncludesMatchers, :include_mod_that_includes_rspec_matchers => true
   end
 
-  describe self do
+  RSpec.describe self do
     shared_examples_for "a normal module with a method that supers" do
       it "raises the expected error (and not SystemStackError)" do
         expect { __method_with_super }.to raise_error(NoMethodError) # there is no __method_with_super in an ancestor

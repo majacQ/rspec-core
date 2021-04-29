@@ -1,41 +1,43 @@
-shared_examples_for "metadata hash builder" do
-  context "when RSpec.configuration.treat_symbols_as_metadata_keys_with_true_values is set to true" do
-    let(:hash) { metadata_hash(:foo, :bar, :bazz => 23) }
+RSpec.shared_examples_for "metadata hash builder" do
+  let(:hash) { metadata_hash(:foo, :bar, :bazz => 23) }
 
-    before(:each) do
-      RSpec.configure { |c| c.treat_symbols_as_metadata_keys_with_true_values = true }
-    end
-
-    it 'treats symbols as metadata keys with a true value' do
-      expect(hash[:foo]).to be(true)
-      expect(hash[:bar]).to be(true)
-    end
-
-    it 'still processes hash values normally' do
-      expect(hash[:bazz]).to be(23)
-    end
+  it 'treats symbols as metadata keys with a true value' do
+    expect(hash[:foo]).to be(true)
+    expect(hash[:bar]).to be(true)
   end
 
-  context "when RSpec.configuration.treat_symbols_as_metadata_keys_with_true_values is set to false" do
-    let(:warning_receiver) { Kernel }
+  it 'still processes hash values normally' do
+    expect(hash[:bazz]).to be(23)
+  end
+end
 
-    before(:each) do
-      RSpec.configure { |c| c.treat_symbols_as_metadata_keys_with_true_values = false }
-      warning_receiver.stub(:warn)
-    end
+RSpec.shared_examples_for "handling symlinked directories when loading spec files" do
+  include_context "isolated directory"
+  let(:project_dir) { Dir.getwd }
 
-    it 'prints a deprecation warning about any symbols given as arguments' do
-      warning_receiver.should_receive(:warn).with(/In RSpec 3, these symbols will be treated as metadata keys/)
-      metadata_hash(:foo, :bar, :key => 'value')
-    end
+  it "finds the files" do
+    foos_dir = File.join(project_dir, "spec/foos")
+    FileUtils.mkdir_p foos_dir
+    FileUtils.touch(File.join(foos_dir, "foo_spec.rb"))
 
-    it 'does not treat symbols as metadata keys' do
-      expect(metadata_hash(:foo, :bar, :key => 'value')).not_to include(:foo, :bar)
-    end
+    bars_dir = File.join(Dir.tmpdir, "shared/spec/bars")
+    FileUtils.mkdir_p bars_dir
+    FileUtils.touch(File.join(bars_dir, "bar_spec.rb"))
 
-    it 'does not print a warning if there are no symbol arguments' do
-      warning_receiver.should_not_receive(:warn)
-      metadata_hash(:foo => 23, :bar => 17)
-    end
+    FileUtils.ln_s bars_dir, File.join(project_dir, "spec/bars")
+
+    expect(loaded_files).to contain_files(
+      "spec/bars/bar_spec.rb",
+      "spec/foos/foo_spec.rb"
+    )
+  end
+
+  it "works on a more complicated example (issue 1113)" do
+    FileUtils.mkdir_p("subtrees/DD/spec")
+    FileUtils.mkdir_p("spec/lib")
+    FileUtils.touch("subtrees/DD/spec/dd_foo_spec.rb")
+    FileUtils.ln_s(File.join(project_dir, "subtrees/DD/spec"), "spec/lib/DD")
+
+    expect(loaded_files).to contain_files("spec/lib/DD/dd_foo_spec.rb")
   end
 end
