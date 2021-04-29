@@ -1,11 +1,11 @@
 RSpec::Support.require_rspec_core "formatters/base_formatter"
-RSpec::Support.require_rspec_core "formatters/console_codes"
 
 module RSpec
   module Core
     module Formatters
-      # Base for all of RSpec's built-in formatters. See RSpec::Core::Formatters::BaseFormatter
-      # to learn more about all of the methods called by the reporter.
+      # Base for all of RSpec's built-in formatters. See
+      # RSpec::Core::Formatters::BaseFormatter to learn more about all of the
+      # methods called by the reporter.
       #
       # @see RSpec::Core::Formatters::BaseFormatter
       # @see RSpec::Core::Reporter
@@ -13,7 +13,6 @@ module RSpec
         Formatters.register self,
                             :message, :dump_summary, :dump_failures, :dump_pending, :seed
 
-        # @method message
         # @api public
         #
         # Used by the reporter to send messages to the output stream.
@@ -23,7 +22,6 @@ module RSpec
           output.puts notification.message
         end
 
-        # @method dump_failures
         # @api public
         #
         # Dumps detailed information about each example failure.
@@ -34,14 +32,13 @@ module RSpec
           output.puts notification.fully_formatted_failed_examples
         end
 
-        # @method dump_summary
         # @api public
         #
-        # This method is invoked after the dumping of examples and failures. Each parameter
-        # is assigned to a corresponding attribute.
+        # This method is invoked after the dumping of examples and failures.
+        # Each parameter is assigned to a corresponding attribute.
         #
-        # @param summary [SummaryNotification] containing duration, example_count,
-        #                                      failure_count and pending_count
+        # @param summary [SummaryNotification] containing duration,
+        #   example_count, failure_count and pending_count
         def dump_summary(summary)
           output.puts summary.fully_formatted
         end
@@ -60,15 +57,17 @@ module RSpec
 
         # @api public
         #
-        # Invoked at the very end, `close` allows the formatter to clean
-        # up resources, e.g. open streams, etc.
+        # Invoked at the end of a suite run. Allows the formatter to do any
+        # tidying up, but be aware that formatter output streams may be used
+        # elsewhere so don't actually close them.
         #
-        # @param notification [NullNotification]
+        # @param _notification [NullNotification] (Ignored)
         def close(_notification)
-          return unless IO === output
-          return if output.closed? || output == $stdout
+          return if output.closed?
 
-          output.close
+          output.puts
+
+          output.flush
         end
       end
     end

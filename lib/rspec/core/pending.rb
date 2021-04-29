@@ -1,9 +1,10 @@
 module RSpec
   module Core
-    # Provides methods to mark examples as pending. These methods are available to be
-    # called from within any example or hook.
+    # Provides methods to mark examples as pending. These methods are available
+    # to be called from within any example or hook.
     module Pending
-      # Raised in the middle of an example to indicate that it should be marked as skipped.
+      # Raised in the middle of an example to indicate that it should be marked
+      # as skipped.
       class SkipDeclaredInExample < StandardError
         attr_reader :argument
 
@@ -12,8 +13,9 @@ module RSpec
         end
       end
 
-      # If Test::Unit is loaded, we'll use its error as baseclass, so that Test::Unit
-      # will report unmet RSpec expectations as failures rather than errors.
+      # If Test::Unit is loaded, we'll use its error as baseclass, so that
+      # Test::Unit will report unmet RSpec expectations as failures rather than
+      # errors.
       begin
         class PendingExampleFixedError < Test::Unit::AssertionFailedError; end
       rescue
@@ -36,7 +38,7 @@ module RSpec
       # @param message [String] optional message to add to the summary report.
       #
       # @example
-      #     describe "an example" do
+      #     describe "some behaviour" do
       #       # reported as "Pending: no reason given"
       #       it "is pending with no message" do
       #         pending
@@ -50,35 +52,19 @@ module RSpec
       #       end
       #     end
       #
-      # @note `before(:example)` hooks are eval'd when you use the `pending`
-      #   method within an example. If you want to declare an example `pending`
-      #   and bypass the `before` hooks as well, you can pass `:pending => true`
-      #   to the `it` method:
-      #
-      #       it "does something", :pending => true do
-      #         # ...
-      #       end
-      #
-      #   or pass `:pending => "something else getting finished"` to add a
-      #   message to the summary report:
-      #
-      #       it "does something", :pending => "something else getting finished" do
-      #         # ...
-      #       end
+      # @note When using `pending` inside an example body using this method
+      #   hooks, such as `before(:example)`, have already be run. This means that
+      #   a failure from the code in the `before` hook will prevent the example
+      #   from being considered pending, as the example body would not be
+      #   executed. If you need to consider hooks as pending as well you can use
+      #   the pending metadata as an alternative, e.g.
+      #   `it "does something", pending: "message"`.
       def pending(message=nil)
         current_example = RSpec.current_example
 
         if block_given?
           raise ArgumentError, <<-EOS.gsub(/^\s+\|/, '')
-            |The semantics of `RSpec::Core::Pending#pending` have changed in
-            |RSpec 3.  In RSpec 2.x, it caused the example to be skipped. In
-            |RSpec 3, the rest of the example is still run but is expected to
-            |fail, and will be marked as a failure (rather than as pending) if
-            |the example passes.
-            |
-            |Passing a block within an example is now deprecated. Marking the
-            |example as pending provides the same behavior in RSpec 3 which was
-            |provided only by the block in RSpec 2.x.
+            |Passing a block within an example is not supported.
             |
             |Move the code in the block provided to `pending` into the rest of
             |the example body.
@@ -123,7 +109,7 @@ module RSpec
 
       # @private
       #
-      # Mark example as skipped
+      # Mark example as skipped.
       #
       # @param example [RSpec::Core::Example] the example to mark as skipped
       # @param message_or_bool [Boolean, String] the message to use, or true
@@ -134,7 +120,7 @@ module RSpec
 
       # @private
       #
-      # Mark example as pending
+      # Mark example as pending.
       #
       # @param example [RSpec::Core::Example] the example to mark as pending
       # @param message_or_bool [Boolean, String] the message to use, or true
@@ -152,7 +138,7 @@ module RSpec
 
       # @private
       #
-      # Mark example as fixed
+      # Mark example as fixed.
       #
       # @param example [RSpec::Core::Example] the example to mark as fixed
       def self.mark_fixed!(example)

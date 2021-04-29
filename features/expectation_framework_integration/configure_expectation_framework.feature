@@ -45,7 +45,8 @@ Feature: configure expectation framework
     Then the examples should all pass
 
   Scenario: Configure test/unit assertions
-    Given a file named "example_spec.rb" with:
+    Given rspec-expectations is not installed
+      And a file named "example_spec.rb" with:
       """ruby
       RSpec.configure do |config|
         config.expect_with :test_unit
@@ -72,7 +73,8 @@ Feature: configure expectation framework
     And  the output should contain "3 examples, 1 failure"
 
   Scenario: Configure minitest assertions
-    Given a file named "example_spec.rb" with:
+    Given rspec-expectations is not installed
+      And a file named "example_spec.rb" with:
       """ruby
       RSpec.configure do |config|
         config.expect_with :minitest
@@ -89,6 +91,10 @@ Feature: configure expectation framework
         it "is empty (intentional failure)" do
           assert_empty [1], "errantly expected [1] to be empty"
         end
+
+        it "marks pending for skip method" do
+          skip "intentionally"
+        end
       end
       """
     When I run `rspec -b example_spec.rb`
@@ -97,7 +103,7 @@ Feature: configure expectation framework
            MiniT|test::Assertion:
              errantly expected \[1\] to be empty
       """
-    And  the output should contain "3 examples, 1 failure"
+    And  the output should contain "4 examples, 1 failure, 1 pending"
     And  the output should not contain "Warning: you should require 'minitest/autorun' instead."
 
   Scenario: Configure rspec/expectations AND test/unit assertions
@@ -120,7 +126,7 @@ Feature: configure expectation framework
     When I run `rspec example_spec.rb`
     Then the examples should all pass
 
-  Scenario: Configure rspec/expecations AND minitest assertions
+  Scenario: Configure rspec/expectations AND minitest assertions
     Given a file named "example_spec.rb" with:
       """ruby
       RSpec.configure do |config|
@@ -142,7 +148,8 @@ Feature: configure expectation framework
     Then the examples should all pass
 
   Scenario: Configure test/unit and minitest assertions
-    Given a file named "example_spec.rb" with:
+    Given rspec-expectations is not installed
+      And a file named "example_spec.rb" with:
       """ruby
       RSpec.configure do |config|
         config.expect_with :test_unit, :minitest

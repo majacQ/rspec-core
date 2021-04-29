@@ -1,8 +1,7 @@
-require 'spec_helper'
 require 'pathname'
 
 module RSpec::Core::Formatters
-  describe Loader do
+  RSpec.describe Loader do
 
     let(:output)   { StringIO.new }
     let(:reporter) { instance_double "Reporter", :register_listener => nil }
@@ -40,9 +39,17 @@ module RSpec::Core::Formatters
         expect(loader.formatters.first).to be_an_instance_of(CustomFormatter)
       end
 
+      it "lets you pass a formatter instance, for when you need to instantiate it with some custom state" do
+        instance = ProgressFormatter.new(StringIO.new)
+
+        expect {
+          loader.add(instance)
+        }.to change { loader.formatters }.from([]).to([instance])
+      end
+
       context "when a legacy formatter is added with RSpec::LegacyFormatters" do
         formatter_class = Struct.new(:output)
-        let(:formatter) { double "formatter", :notifications => notifications }
+        let(:formatter) { double "formatter", :notifications => notifications, :output => output }
         let(:notifications) { [:a, :b, :c] }
 
         before do
@@ -58,6 +65,14 @@ module RSpec::Core::Formatters
           expect(reporter).to receive(:register_listener).with(formatter, *notifications)
           loader.add formatter_class, output
         end
+
+        it "will ignore duplicate legacy formatters" do
+          loader.add formatter_class, output
+          expect(reporter).to_not receive(:register_listener)
+          expect {
+            loader.add formatter_class, output
+          }.not_to change { loader.formatters.length }
+        end
       end
 
       context "when a legacy formatter is added without RSpec::LegacyFormatters" do
@@ -68,9 +83,9 @@ module RSpec::Core::Formatters
         end
 
         it "issues a deprecation" do
-          expect_warn_deprecation_with_call_site(__FILE__, __LINE__ + 2,
-            /The #{formatter_class} formatter uses the deprecated formatter interface/)
-          loader.add formatter_class, output
+          expect {
+            loader.add formatter_class, output
+          }.to raise_error(ArgumentError, /The #{formatter_class} formatter uses the deprecated formatter interface not supported directly by RSpec 4/)
         end
       end
 
@@ -118,6 +133,7 @@ module RSpec::Core::Formatters
         before { loader.add :documentation, output }
 
         it "doesn't add the formatter for the same output target" do
+          expect(reporter).to_not receive(:register_listener)
           expect {
             loader.add :documentation, output
           }.not_to change { loader.formatters.length }
@@ -129,30 +145,70 @@ module RSpec::Core::Formatters
           }.to change { loader.formatters.length }
         end
       end
+
+      context "When a custom formatter exists" do
+        specific_formatter = RSpec::Core::Formatters::JsonFormatter
+        generic_formatter = specific_formatter.superclass
+
+        before { loader.add generic_formatter, output }
+
+        it "adds a subclass of that formatter for the same output target" do
+          expect {
+            loader.add specific_formatter, output
+          }.to change { loader.formatters.length }
+        end
+      end
     end
 
-    describe "#setup_default", "with profiling enabled" do
+    describe "#setup_default" do
       let(:setup_default) { loader.setup_default output, output }
 
-      before do
-        allow(RSpec.configuration).to receive(:profile_examples?) { true }
-      end
-
-      context "without an existing profile formatter" do
-        it "will add the profile formatter" do
-          allow(reporter).to receive(:registered_listeners).with(:dump_profile) { [] }
+      context "with a formatter that implements #message" do
+        it 'doesnt add a fallback formatter' do
+          allow(reporter).to receive(:registered_listeners).with(:message) { [:json] }
           setup_default
-          expect(loader.formatters.last).to be_a ::RSpec::Core::Formatters::ProfileFormatter
+          expect(loader.formatters).to exclude(
+            an_instance_of ::RSpec::Core::Formatters::FallbackMessageFormatter
+          )
         end
       end
 
-      context "when a formatter that implement #dump_profile is added" do
-        it "wont add the profile formatter" do
-          allow(reporter).to receive(:registered_listeners).with(:dump_profile) { [:json] }
-          setup_default
-          expect(
-            loader.formatters.map(&:class)
-          ).to_not include ::RSpec::Core::Formatters::ProfileFormatter
+      context "without a formatter that implements #message" do
+        it 'adds a fallback for message output' do
+          allow(reporter).to receive(:registered_listeners).with(:message) { [] }
+          expect {
+            setup_default
+          }.to change { loader.formatters }.
+            from( excluding an_instance_of ::RSpec::Core::Formatters::FallbackMessageFormatter ).
+            to( including an_instance_of ::RSpec::Core::Formatters::FallbackMessageFormatter )
+        end
+      end
+
+      context "with profiling enabled" do
+        before do
+          allow(reporter).to receive(:registered_listeners).with(:message) { [:json] }
+          allow(RSpec.configuration).to receive(:profile_examples?) { true }
+        end
+
+        context "without an existing profile formatter" do
+          it "will add the profile formatter" do
+            allow(reporter).to receive(:registered_listeners).with(:dump_profile) { [] }
+            expect {
+              setup_default
+            }.to change { loader.formatters }.
+              from( excluding an_instance_of ::RSpec::Core::Formatters::ProfileFormatter ).
+              to( including an_instance_of ::RSpec::Core::Formatters::ProfileFormatter )
+          end
+        end
+
+        context "when a formatter that implement #dump_profile is added" do
+          it "wont add the profile formatter" do
+            allow(reporter).to receive(:registered_listeners).with(:dump_profile) { [:json] }
+            setup_default
+            expect(
+              loader.formatters.map(&:class)
+            ).to_not include ::RSpec::Core::Formatters::ProfileFormatter
+          end
         end
       end
     end

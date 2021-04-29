@@ -218,3 +218,28 @@ Feature: Profile examples
     When I run `rspec spec --fail-fast --profile`
     Then the output should not contain "Top 2 slowest examples"
     And the output should not contain "example 1"
+
+  Scenario: Using `--profile` with slow before hooks includes hook execution time
+    Given a file named "spec/example_spec.rb" with:
+      """ruby
+      RSpec.describe "slow before context hook" do
+        before(:context) do
+          sleep 0.2
+        end
+
+        context "nested" do
+          it "example" do
+            expect(10).to eq(10)
+          end
+        end
+      end
+
+      RSpec.describe "slow example" do
+        it "slow example" do
+          sleep 0.1
+          expect(10).to eq(10)
+        end
+      end
+      """
+    When I run `rspec spec --profile 1`
+    Then the output should report "slow before context hook" as the slowest example group

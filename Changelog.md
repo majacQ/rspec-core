@@ -1,5 +1,817 @@
-### 3.1.0 Development
-[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.0.4...master)
+### Development
+
+Breaking Changes:
+
+* Ruby < 2.3 is no longer supported. (Phil Pirozhkov, #2787)
+* Extract `should` syntax (including the non-monkey-patching one liner). (Phil Pirozhkov, #2803)
+* Remove globally-exposed DSL (example and shared group methods
+  in the root scope and on Module). (Phil Pirozhkov, #2803)
+* Change the default `shared_context_metadata_behavior` to `apply_to_host_groups`
+  and remove the configuration option. (Phil Pirozhkov, #2834)
+* Remove `run_all_when_everything_filtered` configuration option. (Phil Pirozhkov, #2845)
+* Raise on unsupported hook scope usage. (Phil Pirozhkov, #2849)
+* Raise on usage of metadata on suite-level scopes. (Phil Pirozhkov, #2849)
+* Raise an error when `fail_fast` is configured with
+  an unsupported value. (Phil Pirozhkov, #2849)
+* Remove deprecated access to an example group's metadata through the example.
+  (Phil Pirozhkov, #2851)
+* Remove deprecated Hash-like behavior from example
+  execution result. (Phil Pirozhkov, #2862)
+* Skip setting the default pattern from Rake task. (Phil Pirozhkov, #2868)
+* Remove special `:if`/`:unless` filtering metadata. (Phil Pirozhkov, #2870)
+* Remove deprecated `color` configuration option and `--color` command line
+  option. (Phil Pirozhkov, #2864)
+* Remove `it_should_behave_like` nested shared group method and
+  `alias_it_should_behave_like_to` configuration option. (Phil Pirozhkov, #2864)
+* Remove deprecated `treat_symbols_as_metadata_keys_with_true_values` configuration
+  option. (Phil Pirozhkov, #2864)
+* Remove support for Mocha version < 1.0. (Phil Pirozhkov, #2864)
+* Remove deprecated `PendingExampleFixedNotification` and
+  `PendingExampleFailedAsExpectedNotification` classes. (Phil Pirozhkov, #2864)
+* Remove deprecated `rerun_argument` example method. (Phil Pirozhkov, #2864)
+* Raise on attempt to use a legacy formatter without `rspec-legacy_formatters`.
+  (Phil Pirozhkov, #2864)
+* Unify multi-condition filtering to use "all" semantic. (Phil Pirozhkov, #2874)
+* Remove support for RR test double framework version < 3.0. (Phil Pirozhkov, #2884)
+
+Enhancements:
+
+* Improve pluralisation of words ending with `s` (like process). (Joshua Pinter, #2779)
+* Add ordering by file modification time (most recent first). (Matheus Richard, #2778)
+* Add `to_s` to reserved names for #let and #subject. (Nick Flückiger, #2886)
+
+Bug fixes:
+
+* Ensure bisect communication uses consistent encoding. (Mike Jarema, #2852)
+
+### 3.10.1 / 2020-12-27
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.10.0...v3.10.1)
+
+Bug fixes:
+
+* RSpec warning output was missing deprecations from Ruby, these are now included.
+  (Jon Rowe, #2811)
+
+### 3.10.0 / 2020-10-30
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.3...v3.10.0)
+
+Enhancements:
+
+* Memoize `RSpec::Core::Formatters::ExceptionPresenter#exception_lines` to improve performance
+  with slow exception messages. (Maxime Lapointe, #2743)
+* Add configuration for an error exit code (to disambiguate errored builds from failed builds
+  by exit status). (Dana Sherson, #2749)
+
+# 3.9.3 / 2020-09-30
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.2...v3.9.3)
+
+Bug Fixes:
+
+* Declare `ruby2_keywords` on `method_missing` for other gems. (Jon Rowe, #2731)
+* Ensure custom error codes are returned from bisect runs. (Jon Rowe, #2732)
+* Ensure `RSpec::Core::Configuration` predicate config methods return booleans.
+  (Marc-André Lafortune, #2736)
+* Prevent `rspec --bisect` from generating zombie processes while executing
+  bisect runs. (Benoit Tigeot, Jon Rowe, #2739)
+* Predicates for pending examples, (in `RSpec::Core::Example`, `#pending?`, `#skipped?` and
+  `#pending_fixed?`) now return boolean values rather than truthy values.
+  (Marc-André Lafortune, #2756, #2758)
+* Exceptions which have a message which cannot be cast to a string will no longer
+  cause a crash. (Jon Rowe, #2761)
+
+### 3.9.2 / 2020-05-02
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.1...v3.9.2)
+
+Bug Fixes:
+
+* Emit a warning when `around` hook is used with `:context` scope
+  (Phil Pirozhkov, #2687)
+* Prevent invalid implementations of `Exception#cause` from being treated as a
+  valid cause (and causing strange errors) in `RSpec::Core::Formatters::ExceptionPresenter`.
+  (Jon Rowe, #2703)
+* Correctly detect patterns when `rspec_opts` is an array in `RSpec::Core::RakeTask`.
+  (Marc-André Lafortune, #2704)
+* Make `RSpec.clear_examples` reset example counts for example groups. This fixes
+  an issue with re-running specs not matching ids. (Agis Anastasopoulos, #2723)
+
+### 3.9.1 / 2019-12-28
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.0...v3.9.1)
+
+Bug Fixes:
+
+* Prevent bisect command from blocking when number of specs exceeds file
+  descriptor limit on OSX or Linux. (Benoit Tigeot, #2669)
+* Prevent warnings being issued on Ruby 2.7.0. (Jon Rowe, #2680)
+
+### 3.9.0 / 2019-10-07
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.2...v3.9.0)
+
+Enhancements:
+
+* Improve the handling of errors during loading support files, if a file
+  errors before loading specs, RSpec will now skip loading the specs.
+  (David Rodríguez, #2568)
+* Add support for --example-matches to run examples by regular expression.
+  (Sam Joseph, Matt Rider, @okothkongo1, #2586)
+* Add `did_you_mean` suggestions for file names encountering a `LoadError`
+  outside of examples. (@obromios, #2601)
+* Add a minimalist quick fix style formatter, only outputs failures as
+  `file:line:message`. (Romain Tartière, #2614)
+* Convert string number values to integer when used for `RSpec::Configuration#fail_fast`
+  (Viktor Fonic, #2634)
+* Issue warning when invalid values are used for `RSpec::Configuration#fail_fast`
+  (Viktor Fonic, #2634)
+* Add support for running the Rake task in a clean environment.
+  (Jon Rowe, #2632)
+* Indent messages by there example group / example in the documentation formatter.
+  (Samuel Williams, #2649)
+
+### 3.8.2 / 2019-06-29
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.1...v3.8.2)
+
+Bug Fixes:
+
+* Fix `config.define_derived_metadata` so that cascades are not triggered
+  until metadata has been assigned to the example or example group
+  (Myron Marston, #2635).
+
+### 3.8.1 / 2019-06-13
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.0...v3.8.1)
+
+Bug Fixes:
+
+* Handle RSpec description(s) with japanese chars in CP932 encoded files.
+  (Benoit Tigeot, #2575)
+* When defining `let` methods that overwrite an existing method, prevent
+  a warning being issued by removing the old definition. (Jon Rowe, #2593)
+* Prevent warning on Ruby 2.6.0-rc1 (Keiji Yoshimi, #2582)
+* Fix `config.define_derived_metadata` so that it supports cascades.
+  (Myron Marston, #2630).
+
+### 3.8.0 / 2018-08-04
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.7.1...v3.8.0)
+
+Enhancements:
+
+* Improve shell escaping used by `RSpec::Core::RakeTask` and `--bisect` so
+  that it works on `Pathname` objects. (Andrew Vit, #2479)
+* Nicely format errors encountered while loading files specified
+  by `--require` option.  (Myron Marston, #2504)
+* Significantly improve the performance of `--bisect` on platforms that
+  support forking by replacing the shell-based runner with one that uses
+  forking so that RSpec and the application environment can be booted only
+  once, instead of once per spec run. (Myron Marston, #2511)
+* Provide a configuration API to pick which bisect runner is used for
+  `--bisect`. Pick a runner via `config.bisect_runner = :shell` or
+  `config.bisect_runner = :fork` in a file loaded by a `--require`
+  option passed at the command line or set in `.rspec`. (Myron Marston, #2511)
+* Support the [XDG Base Directory
+  Specification](https://specifications.freedesktop.org/basedir-spec/latest/)
+  for the global options file. `~/.rspec` is still supported when no
+  options file is found in `$XDG_CONFIG_HOME/rspec/options` (Magnus Bergmark, #2538)
+* Extract `RSpec.world.prepare_example_filtering` that sets up the
+  example filtering for custom RSpec runners. (Oleg Pudeyev, #2552)
+
+Bug Fixes:
+
+* Prevent an `ArgumentError` when truncating backtraces with two identical
+  backtraces. (Systho, #2515, Benoit Tigeot, #2539)
+
+### 3.7.1 / 2018-01-02
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.7.0...v3.7.1)
+
+Bug Fixes:
+
+* Work around duplicate config hook regression introduced
+  by Ruby 2.5's lazy proc allocation. (Myron Marston, #2497)
+
+### 3.7.0 / 2017-10-17
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.6.0...v3.7.0)
+
+Enhancements:
+
+* Add `-n` alias for `--next-failure`. (Ian Ker-Seymer, #2434)
+* Improve compatibility with `--enable-frozen-string-literal` option
+  on Ruby 2.3+. (Pat Allan, #2425, #2427, #2437)
+* Do not run `:context` hooks for example groups that have been skipped.
+  (Devon Estes, #2442)
+* Add `errors_outside_of_examples_count` to the JSON formatter.
+  (Takeshi Arabiki, #2448)
+
+Bug Fixes:
+
+* Improve compatibility with frozen string literal flag. (#2425, Pat Allan)
+
+### 3.6.0 / 2017-05-04
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.6.0.beta2...v3.6.0)
+
+Enhancements:
+
+* Add seed information to JSON formatter output. (#2388, Mitsutaka Mimura)
+* Include example id in the JSON formatter output. (#2369, Xavier Shay)
+* Respect changes to `config.output_stream` after formatters have been
+  setup. (#2401, #2419, Ilya Lavrov)
+
+Bug Fixes:
+
+* Delay formatter loading until the last minute to allow accessing the reporter
+  without triggering formatter setup. (Jon Rowe, #2243)
+* Ensure context hook failures running before an example can access the
+  reporter. (Jon Jensen, #2387)
+* Multiple fixes to allow using the runner multiple times within the same
+  process: `RSpec.clear_examples` resets the formatter and no longer clears
+  shared examples, and streams can be used across multiple runs rather than
+  being closed after the first. (#2368, Xavier Shay)
+* Prevent unexpected `example_group_finished` notifications causing an error.
+  (#2396, VTJamie)
+* Fix bugs where `config.when_first_matching_example_defined` hooks would fire
+  multiple times in some cases. (Yuji Nakayama, #2400)
+* Default `last_run_status` to "unknown" when the `status` field in the
+  persistence file contains an unrecognized value. (#2360, matrinox)
+* Prevent `let` from defining an `initialize` method. (#2414, Jon Rowe)
+
+### 3.6.0.beta2 / 2016-12-12
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.6.0.beta1...v3.6.0.beta2)
+
+Enhancements:
+
+* Include count of errors occurring outside examples in default summaries.
+  (#2351, Jon Rowe)
+* Warn when including shared example groups recursively. (#2356, Jon Rowe)
+* Improve failure snippet syntax highlighting with CodeRay to highlight
+  RSpec "keywords" like `expect`. (#2358, Myron Marston)
+
+### 3.6.0.beta1 / 2016-10-09
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.4...v3.6.0.beta1)
+
+Enhancements:
+
+* Warn when duplicate shared examples definitions are loaded due to being
+  defined in files matching the spec pattern (e.g. `_spec.rb`) (#2278, Devon Estes)
+* Improve metadata filtering so that it can match against any object
+  that implements `===` instead of treating regular expressions as
+  special. (Myron Marston, #2294)
+* Improve `rspec -v` so that it prints out the versions of each part of
+  RSpec to prevent confusion. (Myron Marston, #2304)
+* Add `config.fail_if_no_examples` option which causes RSpec to fail if
+  no examples are found. (Ewa Czechowska, #2302)
+* Nicely format errors encountered while loading spec files.
+  (Myron Marston, #2323)
+* Improve the API for enabling and disabling color output (Josh
+  Justice, #2321):
+  * Automatically enable color if the output is a TTY, since color is
+    nearly always desirable if the output can handle it.
+  * Introduce new CLI flag to force color on (`--force-color`), even
+    if the output is not a TTY. `--no-color` continues to work as well.
+  * Introduce `config.color_mode` for configuring the color from Ruby.
+    `:automatic` is the default and will produce color if the output is
+    a TTY. `:on` forces it on and `:off` forces it off.
+
+### 3.5.4 / 2016-09-30
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.3...v3.5.4)
+
+Bug Fixes:
+
+* Remove accumulated `ExampleGroup` constants when reseting RSpec,
+  preventing a memory leak. (TravisSpangle, #2328)
+
+### 3.5.3 / 2016-09-02
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.2...v3.5.3)
+
+Bug Fixes:
+
+* When applying shared group metadata to a host group, overwrite
+  conflicting keys if the value in the host group was inherited from
+  a parent group instead of being specified at that level.
+  (Myron Marston, #2307)
+* Handle errors in `:suite` hooks and provide the same nicely formatted
+  output as errors that happen in examples. (Myron Marston, #2316)
+* Set the exit status to non-zero when an error occurs in an
+  `after(:context)` hook. (Myron Marston, #2320)
+
+### 3.5.2 / 2016-07-28
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.1...v3.5.2)
+
+Bug Fixes:
+
+* Wait to report `example_finished` until the example's `execution_result`
+  has been completely filled in. (Myron Marston, #2291)
+* Make sure example block is still available when using `duplicate_with`
+  to clone examples. (bootstraponline, #2298)
+* Don't include the default `--pattern` in the Rake task when
+  `rspec_opts` specifies its own. (Jon Rowe, #2305)
+
+### 3.5.1 / 2016-07-06
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.0...v3.5.1)
+
+Bug Fixes:
+
+* Ensure that config hooks that are added to existing example groups are
+  added only once. (Eugene Kenny, #2280)
+
+### 3.5.0 / 2016-07-01
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.0.beta4...v3.5.0)
+
+Enhancements:
+
+* Include any `SPEC_OPTS` in reproduction command printed at the end of
+  a bisect run. (Simon Coffey, #2274)
+
+Bug Fixes:
+
+* Handle `--bisect` in `SPEC_OPTS` environment variable correctly so as
+  to avoid infinite recursion. (Simon Coffey, #2271)
+
+### 3.5.0.beta4 / 2016-06-05
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.0.beta3...v3.5.0.beta4)
+
+Enhancements:
+
+* Filter out bundler stackframes from backtraces by default, since
+  Bundler 1.12 now includes its own frames in stack traces produced
+  by using `bundle exec`. (Myron Marston, #2240)
+* HTML Formatter uses exception presenter to get failure message
+  for consistency with other formatters. (@mrageh, #2222)
+* Load spec files in the order of the directories or files passed
+  at the command line, making it easy to make some specs run before
+  others in a one-off manner.  For example, `rspec spec/unit
+  spec/acceptance --order defined` will run unit specs before acceptance
+  specs. (Myron Marston, #2253)
+* Add new `config.include_context` API for configuring global or
+  filtered inclusion of shared contexts in example groups.
+  (Myron Marston, #2256)
+* Add new `config.shared_context_metadata_behavior = :apply_to_host_groups`
+  option, which causes shared context metadata to be inherited by the
+  metadata hash of all host groups and examples instead of configuring
+  implicit auto-inclusion based on the passed metadata. (Myron Marston, #2256)
+
+Bug Fixes:
+
+* Fix `--bisect` so it works on large spec suites that were previously triggering
+  "Argument list too long errors" due to all the spec locations being passed as
+  CLI args. (Matt Jones, #2223).
+* Fix deprecated `:example_group`-based filtering so that it properly
+  applies to matching example groups. (Myron Marston, #2234)
+* Fix `NoMethodError` caused by Java backtraces on JRuby. (Michele Piccirillo, #2244)
+
+### 3.5.0.beta3 / 2016-04-02
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.0.beta2...v3.5.0.beta3)
+
+Enhancements:
+
+* Add new `config.filter_run_when_matching` API, intended to replace
+  the combination of `config.filter_run` and
+  `config.run_all_when_everything_filtered` (Myron Marston, #2206)
+
+Bug Fixes:
+
+* Use the encoded string logic for source extraction. (Jon Rowe, #2183)
+* Fix rounding issue in duration formatting helper. (Fabersky, Jon Rowe, #2208)
+* Fix failure snippet extraction so that `def-end` snippets
+  ending with `end`-only line can be extracted properly.
+  (Yuji Nakayama, #2215)
+
+### 3.5.0.beta2 / 2016-03-10
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.5.0.beta1...v3.5.0.beta2)
+
+Enhancements:
+
+* Remove unneeded `:execution_result` example group metadata, saving a
+  bit of memory. (Myron Marston, #2172)
+* Apply hooks registered with `config` to previously defined groups.
+  (Myron Marston, #2189)
+* `RSpec::Core::Configuration#reporter` is now public API under SemVer.
+  (Jon Rowe, #2193)
+* Add new `config.when_first_matching_example_defined` hook. (Myron
+  Marston, #2175)
+
+### 3.5.0.beta1 / 2016-02-06
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.4.4...v3.5.0.beta1)
+
+Enhancements:
+
+* Add `RSpec::Core::ExampleGroup.currently_executing_a_context_hook?`,
+  primarily for use by rspec-rails. (Sam Phippen, #2131)
+
+Bug Fixes:
+
+* Ensure `MultipleExceptionError` does not contain a recursive reference
+  to itself. (Sam Phippen, #2133)
+
+### 3.4.4 / 2016-03-09
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.4.3...v3.4.4)
+
+Bug Fixes:
+
+* Fix `RSpec::Core::RakeTask` so that it works with Rake 11.
+  (Travis Grathwell, #2197)
+
+### 3.4.3 / 2016-02-19
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.4.2...v3.4.3)
+
+Bug Fixes:
+
+* Prevent a `TypeError` from occurring when running via the rake task when
+  Ruby crashes. (Patrik Wenger, #2161)
+* Only consider example and group declaration lines from a specific file
+  when applying line number filtering, instead of considering all
+  declaration lines from all spec files. (Myron Marston, #2170)
+* Fix failure snippet extraction so that snippets that contain `do-end` style
+  block and end with `end`-only line can be extracted properly.
+  (Yuji Nakayama, #2173)
+* Prevent infinite recursion when an exception is caused by itself.
+  (Jon Rowe, #2128)
+
+### 3.4.2 / 2016-01-26
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.4.1...v3.4.2)
+
+Bug Fixes:
+
+* Fix `rspec --profile` when an example calls `abort` or `exit`.
+  (Bradley Schaefer, #2144)
+* Fix `--drb` so that when no DRb server is running, it prevents
+  the DRb connection error from being listed as the cause of all
+  expectation failures. (Myron Marston, #2156)
+* Fix syntax highlighter so that it works when the `coderay` gem is
+  installed as a rubygem but not already available on your load path
+  (as happens when you use bundler). (Myron Marston, #2159)
+
+### 3.4.1 / 2015-11-18
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.4.0...v3.4.1)
+
+Bug Fixes:
+
+* Fix backtrace formatter to handle backtraces that are `nil`.
+  (Myron Marston, #2118)
+
+### 3.4.0 / 2015-11-11
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.3.2...v3.4.0)
+
+Enhancements:
+
+* Combine multiple `--pattern` arguments making them equivalent to
+  `--pattern=1,2,...,n`. (Jon Rowe, #2002)
+* Improve `inspect` and `to_s` output for `RSpec::Core::Example`
+  objects, replacing Ruby's excessively verbose output. (Gavin Miller, #1922)
+* Add `silence_filter_announcements` configuration option.
+  (David Raffensperger, #2007)
+* Add optional `example_finished` notification to the reporter protocol for
+  when you don't care about the example outcome. (Jon Rowe, #2013)
+* Switch `--bisect` to a recursion-based bisection algorithm rather than
+  a permutation-based one. This better handles cases where an example
+  depends upon multiple other examples instead of just one and minimizes
+  the number of runs necessary to determine that an example set cannot be
+  minimized further. (Simon Coffey, #1997)
+* Allow simple filters (e.g. `:symbol` key only) to be triggered by truthey
+  values. (Tim Mertens, #2035)
+* Remove unneeded warning about need for `ansicon` on Windows when using
+  RSpec's `--color` option. (Ashley Engelund, #2038)
+* Add option to configure RSpec to raise errors when issuing warnings.
+  (Jon Rowe, #2052)
+* Append the root `cause` of a failure or error to the printed failure
+  output when a `cause` is available. (Adam Magan)
+* Stop rescuing `NoMemoryError`, `SignalExcepetion`, `Interrupt` and
+  `SystemExit`. It is dangerous to interfere with these. (Myron Marston, #2063)
+* Add `config.project_source_dirs` setting which RSpec uses to determine
+  if a backtrace line comes from your project source or from some
+  external library. It defaults to `spec`, `lib` and `app` but can be
+  configured differently. (Myron Marston, #2088)
+* Improve failure line detection so that it looks for the failure line
+  in any project source directory instead of just in the spec file.
+  In addition, if no backtrace lines can be found from a project source
+  file, we fall back to displaying the source of the first backtrace
+  line. This should virtually eliminate the "Unable to find matching
+  line from backtrace" messages. (Myron Marston, #2088)
+* Add support for `:extra_failure_lines` example metadata that will
+  be appended to the failure output. (bootstraponline, #2092).
+* Add `RSpec::Core::Example#duplicate_with` to produce new examples
+  with cloned metadata. (bootstraponline, #2098)
+* Add `RSpec::Core::Configuration#on_example_group_definition` to register
+  hooks to be invoked when example groups are created. (bootstraponline, #2094)
+* Add `add_example` and `remove_example` to `RSpec::Core::ExampleGroup` to
+  allow  manipulating an example groups examples. (bootstraponline, #2095)
+* Display multiline failure source lines in failure output when Ripper is
+  available (MRI >= 1.9.2, and JRuby >= 1.7.5 && < 9.0.0.0.rc1).
+  (Yuji Nakayama, #2083)
+* Add `max_displayed_failure_line_count` configuration option
+  (defaults to 10). (Yuji Nakayama, #2083)
+* Enhance `fail_fast` option so it can take a number (e.g. `--fail-fast=3`)
+  to force the run to abort after the specified number of failures.
+  (Jack Scotti, #2065)
+* Syntax highlight the failure snippets in text formatters when `color`
+  is enabled and the `coderay` gem is installed on a POSIX system.
+  (Myron Marston, #2109)
+
+Bug Fixes:
+
+* Lock `example_status_persistence_file` when reading from and writing
+  to it to prevent race conditions when multiple processes try to use
+  it. (Ben Woosley, #2029)
+* Fix regression in 3.3 that caused spec file names with square brackets in
+  them (such as `1[]_spec.rb`) to not be loaded properly. (Myron Marston, #2041)
+* Fix output encoding issue caused by ASCII literal on 1.9.3 (Jon Rowe, #2072)
+* Fix requires in `rspec/core/rake_task.rb` to avoid double requires
+  seen by some users. (Myron Marston, #2101)
+
+### 3.3.2 / 2015-07-15
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.3.1...v3.3.2)
+
+Bug Fixes:
+
+* Fix formatters to handle exceptions for which `backtrace` returns `nil`.
+  (Myron Marston, #2023)
+* Fix duplicate formatter detection so that it allows subclasses of formatters
+  to be added. (Sebastián Tello, #2019)
+
+### 3.3.1 / 2015-06-18
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.3.0...v3.3.1)
+
+Bug Fixes:
+
+* Correctly run `before(:suite)` (and friends) in the context of an example
+  group instance, thus making the expected RSpec environment available.
+  (Jon Rowe, #1986)
+
+### 3.3.0 / 2015-06-12
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.2.3...v3.3.0)
+
+Enhancements:
+
+* Expose the reporter used to run examples via `RSpec::Core::Example#reporter`.
+  (Jon Rowe, #1866)
+* Make `RSpec::Core::Reporter#message` a public supported API. (Jon Rowe, #1866)
+* Allow custom formatter events to be published via
+  `RSpec::Core::Reporter#publish(event_name, hash_of_attributes)`. (Jon Rowe, #1869)
+* Remove dependency on the standard library `Set` and replace with `RSpec::Core::Set`.
+  (Jon Rowe, #1870)
+* Assign a unique id to each example and group so that they can be
+  uniquely identified, even for shared examples (and similar situations)
+  where the location isn't unique. (Myron Marston, #1884)
+* Use the example id in the rerun command printed for failed examples
+  when the location is not unique. (Myron Marston, #1884)
+* Add `config.example_status_persistence_file_path` option, which is
+  used to persist the last run status of each example. (Myron Marston, #1888)
+* Add `:last_run_status` metadata to each example, which indicates what
+  happened the last time an example ran. (Myron Marston, #1888)
+* Add `--only-failures` CLI option which filters to only the examples
+  that failed the last time they ran. (Myron Marston, #1888)
+* Add `--next-failure` CLI option which allows you to repeatedly focus
+  on just one of the currently failing examples, then move on to the
+  next failure, etc. (Myron Marston, #1888)
+* Make `--order random` ordering stable, so that when you rerun a
+  subset with a given seed, the examples will be order consistently
+  relative to each other. (Myron Marston, #1908)
+* Set example group constant earlier so errors when evaluating the context
+  include the example group name (Myron Marson, #1911)
+* Make `let` and `subject` threadsafe. (Josh Cheek, #1858)
+* Add version information into the JSON formatter. (Mark Swinson, #1883)
+* Add `--bisect` CLI option, which will repeatedly run your suite in
+  order to isolate the failures to the smallest reproducible case.
+  (Myron Marston, #1917)
+* For `config.include`, `config.extend` and `config.prepend`, apply the
+  module to previously defined matching example groups. (Eugene Kenny, #1935)
+* When invalid options are parsed, notify users where they came from
+  (e.g. `.rspec` or `~/.rspec` or `ENV['SPEC_OPTS']`) so they can
+  easily find the source of the problem. (Myron Marston, #1940)
+* Add pending message contents to the json formatter output. (Jon Rowe, #1949)
+* Add shared group backtrace to the output displayed by the built-in
+  formatters for pending examples that have been fixed. (Myron Marston, #1946)
+* Add support for `:aggregate_failures` metadata. Tag an example or
+  group with this metadata and it'll use rspec-expectations'
+  `aggregate_failures` feature to allow multiple failures in an example
+  and list them all, rather than aborting on the first failure. (Myron
+  Marston, #1946)
+* When no formatter implements #message add a fallback to prevent those
+  messages being lost. (Jon Rowe, #1980)
+* Profiling examples now takes into account time spent in `before(:context)`
+  hooks. (Denis Laliberté, Jon Rowe, #1971)
+* Improve failure output when an example has multiple exceptions, such
+  as one from an `it` block and one from an `after` block. (Myron Marston, #1985)
+
+Bug Fixes:
+
+* Handle invalid UTF-8 strings within exception methods. (Benjamin Fleischer, #1760)
+* Fix Rake Task quoting of file names with quotes to work properly on
+  Windows. (Myron Marston, #1887)
+* Fix `RSpec::Core::RakeTask#failure_message` so that it gets printed
+  when the task failed. (Myron Marston, #1905)
+* Make `let` work properly when defined in a shared context that is applied
+  to an individual example via metadata. (Myron Marston, #1912)
+* Ensure `rspec/autorun` respects configuration defaults. (Jon Rowe, #1933)
+* Prevent modules overriding example group defined methods when included,
+  prepended or extended by config defined after an example group. (Eugene Kenny, #1935)
+* Fix regression which caused shared examples to be mistakenly run when specs
+  where filtered to a particular location.  (Ben Axnick, #1963)
+* Fix time formatting logic so that it displays 70 seconds as "1 minute,
+  10 seconds" rather than "1 minute, 1 second". (Paul Brennan, #1984)
+* Fix regression where the formatter loader would allow duplicate formatters.
+  (Jon Rowe, #1990)
+
+### 3.2.3 / 2015-04-06
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.2.2...v3.2.3)
+
+Bug Fixes:
+
+* Fix how the DSL methods are defined so that RSpec is compatible with
+  gems that define methods of the same name on `Kernel` (such as
+  the `its-it` gem). (Alex Kwiatkowski, Ryan Ong, #1907)
+* Fix `before(:context) { skip }` so that it does not wrongly cause the
+  spec suite to exit with a non-zero status when no examples failed.
+  (Myron Marston, #1926)
+
+### 3.2.2 / 2015-03-11
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.2.1...v3.2.2)
+
+Bug Fixes:
+
+* Fix regression in 3.2.0 that allowed tag-filtered examples to
+  run even if there was a location filter applied to the spec
+  file that was intended to limit the file to other examples.
+  (#1894, Myron Marston)
+
+### 3.2.1 / 2015-02-23
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.2.0...v3.2.1)
+
+Bug Fixes:
+
+* Notify start-of-run seed _before_ `start` notification rather than
+  _after_ so that formatters like Fuubar work properly. (Samuel Esposito, #1882)
+
+### 3.2.0 / 2015-02-03
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.7...v3.2.0)
+
+Enhancements:
+
+* Improve the `inspect` output of example groups. (Mike Dalton, #1687)
+* When rake task fails, only output the command if `verbose` flag is
+  set. (Ben Snape, #1704)
+* Add `RSpec.clear_examples` as a clear way to reset examples in between
+  spec runs, whilst retaining user configuration.  (Alexey Fedorov, #1706)
+* Reduce string allocations when defining and running examples by 70%
+  and 50% respectively. (Myron Marston, #1738)
+* Removed dependency on pathname from stdlib. (Sam Phippen, #1703)
+* Improve the message presented when a user hits Ctrl-C.
+  (Alex Chaffee #1717, #1742)
+* Improve shared example group inclusion backtrace displayed
+  in failed example output so that it works for all methods
+  of including shared example groups and shows all inclusion
+  locations. (Myron Marston, #1763)
+* Issue seed notification at start (as well as the end) of the reporter
+  run. (Arlandis Word, #1761)
+* Improve the documentation of around hooks. (Jim Kingdon, #1772)
+* Support prepending of modules into example groups from config and allow
+  filtering based on metadata. (Arlandis Word, #1806)
+* Emit warnings when `:suite` hooks are registered on an example group
+  (where it has always been ignored) or are registered with metadata
+  (which has always been ignored). (Myron Marston, #1805)
+* Provide a friendly error message when users call RSpec example group
+  APIs (e.g. `context`, `describe`, `it`, `let`, `before`, etc) from
+  within an example where those APIs are unavailable. (Myron Marston, #1819)
+* Provide a friendly error message when users call RSpec example
+  APIs (e.g. `expect`, `double`, `stub_const`, etc) from
+  within an example group where those APIs are unavailable.
+  (Myron Marston, #1819)
+* Add new `RSpec::Core::Sandbox.sandboxed { }` API that facilitates
+  testing RSpec with RSpec, allowing you to define example groups
+  and example from within an example without affecting the global
+  `RSpec.world` state. (Tyler Ball, 1808)
+* Apply line-number filters only to the files they are scoped to,
+  allowing you to mix filtered and unfiltered files. (Myron Marston, #1839)
+* When dumping pending examples, include the failure details so that you
+  don't have to un-pend the example to see it. (Myron Marston, #1844)
+* Make `-I` option support multiple values when separated by
+  `File::PATH_SEPARATOR`, such as `rspec -I foo:bar`. This matches
+  the behavior of Ruby's `-I` option. (Fumiaki Matsushima, #1855).
+* Treat each example as having a singleton example group for the
+  purposes of applying metadata-based features that normally apply
+  to example groups to individually tagged examples. For example,
+  `RSpec.shared_context "Uses redis", :uses_redis` will now apply
+  to individual examples tagged with `:uses_redis`, as will
+  `config.include RedisHelpers, :uses_redis`, and
+  `config.before(:context, :uses_redis) { }`, etc. (Myron Marston, #1749)
+
+Bug Fixes:
+
+* When assigning generated example descriptions, surface errors
+  raised by `matcher.description` in the example description.
+  (Myron Marston, #1771)
+* Don't consider expectations from `after` hooks when generating
+  example descriptions. (Myron Marston, #1771)
+* Don't apply metadata-filtered config hooks to examples in groups
+  with matching metadata when those examples override the parent
+  metadata value to not match. (Myron Marston, #1796)
+* Fix `config.expect_with :minitest` so that `skip` uses RSpec's
+  implementation rather than Minitest's. (Jonathan Rochkind, #1822)
+* Fix `NameError` caused when duplicate example group aliases are defined and
+  the DSL is not globally exposed. (Aaron Kromer, #1825)
+* When a shared example defined in an external file fails, use the host
+  example group (from a loaded spec file) for the re-run command to
+  ensure the command will actually work. (Myron Marston, #1835)
+* Fix location filtering to work properly for examples defined in
+  a nested example group within a shared example group defined in
+  an external file. (Bradley Schaefer, Xavier Shay, Myron Marston, #1837)
+* When a pending example fails (as expected) due to a mock expectation,
+  set `RSpec::Core::Example::ExecutionResult#pending_exception` --
+  previously it was not being set but should have been. (Myron Marston, #1844)
+* Fix rake task to work when `rspec-core` is installed in a directory
+  containing a space. (Guido Günther, #1845)
+* Fix regression in 3.1 that caused `describe Regexp` to raise errors.
+  (Durran Jordan, #1853)
+* Fix regression in 3.x that caused the profile information to be printed
+  after the summary. (Max Lincoln, #1857)
+* Apply `--seed` before loading `--require` files so that required files
+  can access the provided seed. (Myron Marston, #1745)
+* Handle `RSpec::Core::Formatters::DeprecationFormatter::FileStream` being
+  reopened with an IO stream, which sometimes happens with spring.
+  (Kevin Mook, #1757)
+
+### 3.1.7 / 2014-10-11
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.6...v3.1.7)
+
+Bug Fixes:
+
+* Fix `Metadata.relative_path` so that for a current directory of
+  `/foo/bar`, `/foo/bar_1` is not wrongly converted to `._1`.
+  (Akos Vandra, #1730)
+* Prevent constant lookup mistakenly finding `RSpec::ExampleGroups` generated
+  constants on 1.9.2 by appending a trailing `_` to the generated names.
+  (Jon Rowe, #1737)
+* Fix bug in `:pending` metadata. If it got set in any way besides passing
+  it as part of the metadata literal passed to `it` (such as by using
+  `define_derived_metadata`), it did not have the desired effect,
+  instead marking the example as `:passed`. (Myron Marston, #1739)
+
+### 3.1.6 / 2014-10-08
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.5...v3.1.6)
+
+Bug Fixes:
+
+* Fix regression in rake task pattern handling, that prevented patterns
+  that were relative from the current directory rather than from `spec`
+  from working properly. (Myron Marston, #1734)
+* Prevent rake task from generating duplicate load path entries.
+  (Myron Marston, #1735)
+
+### 3.1.5 / 2014-09-29
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.4...v3.1.5)
+
+Bug Fixes:
+
+* Fix issue with the rake task incorrectly escaping strings on Windows.
+  (Jon Rowe #1718)
+* Support absolute path patterns. While this wasn't officially supported
+  previously, setting `rake_task.pattern` to an absolute path pattern in
+  RSpec 3.0 and before worked since it delegated to `FileList` internally
+  (but now just forwards the pattern on to the `rspec` command).
+  (Myron Marston, #1726)
+
+### 3.1.4 / 2014-09-18
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.3...v3.1.4)
+
+Bug Fixes:
+
+* Fix implicit `subject` when using `describe false` or `describe nil`
+  so that it returns the provided primitive rather than the string
+  representation. (Myron Marston, #1710)
+* Fix backtrace filtering to allow code in subdirectories of your
+  current working directory (such as vendor/bundle/...) to be filtered
+  from backtraces. (Myron Marston, #1708)
+
+### 3.1.3 / 2014-09-15
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.2...v3.1.3)
+
+Bug Fixes:
+
+* Fix yet another regression in rake task pattern handling, to allow
+  `task.pattern = FileList["..."]` to work. That was never intended
+  to be supported but accidentally worked in 3.0 and earlier.
+  (Myron Marston, #1701)
+* Fix pattern handling so that files are normalized to absolute paths
+  before subtracting the `--exclude-pattern` matched files from the
+  `--pattern` matched files so that it still works even if the patterns
+  are in slightly different forms (e.g. one starting with `./`).
+  (Christian Nelson, #1698)
+
+### 3.1.2 / 2014-09-08
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.1...v3.1.2)
+
+Bug Fixes:
+
+* Fix another regression in rake task pattern handling, so that patterns
+  that start with `./` still work. (Christian Nelson, #1696)
+
+### 3.1.1 / 2014-09-05
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.1.0...v3.1.1)
+
+Bug Fixes:
+
+* Fix a regression in rake task pattern handling, so that `rake_task.pattern = array`
+  works again. While we never intended to support array values (or even knew that worked!),
+  the implementation from 3.0 and earlier used `FileList` internally, which allows arrays.
+  The fix restores the old behavior. (Myron Marston, #1694)
+
+### 3.1.0 / 2014-09-04
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.0.4...v3.1.0)
 
 Enhancements:
 
@@ -52,8 +864,10 @@ Bug Fixes:
   symlinks properly. (Myron Marston, #1672)
 * Change how we assign constant names to example group classes so that
   it avoids a problem with `describe "Core"`. (Daniela Wellisz, #1679)
-* Handle rendering exceptions that are encoded differently to the original
-  spec file.  (Jon Rowe, #1681)
+* Handle rendering exceptions that have a different encoding than that
+  of their original source file. (Jon Rowe, #1681)
+* Allow access to message_lines without colour for failed examples even
+  when they're part of a shared example group. (tomykaira, #1689)
 
 ### 3.0.4 / 2014-08-14
 [Full Changelog](http://github.com/rspec/rspec-core/compare/v3.0.3...v3.0.4)
@@ -369,6 +1183,9 @@ Bug Fixes:
   directory (was broken in beta1). (Jon Rowe)
 * Prevent RSpec mangling file names that have substrings containing `line_number`
   or `default_path`. (Matijs van Zuijlen)
+* Fix failure line detection so that it handles relative file paths
+  (which can happen when running specs through `ruby` using `rspec/autorun`).
+  (Myron Marston, #1829)
 
 ### 3.0.0.beta1 / 2013-11-07
 [Full Changelog](http://github.com/rspec/rspec-core/compare/v2.99.1...v3.0.0.beta1)
@@ -1315,7 +2132,7 @@ project's root directory or in your home directory:
 
     require "autotest/bundler"
 
-Now you can just type 'autotest' on the commmand line and it will work as you expect.
+Now you can just type 'autotest' on the command line and it will work as you expect.
 
 If you don't want 'bundle exec', there is nothing you have to do.
 
@@ -1408,6 +2225,7 @@ Bug fixes
 [Full Changelog](http://github.com/rspec/rspec-core/compare/v2.2.0...v2.2.1)
 
 Bug fixes
+
 * alias_method instead of override Kernel#method_missing (John Wilger)
 * changed --autotest to --tty in generated command (MIKAMI Yoshiyuki)
 * revert change to debugger (had introduced conflict with Rails)
@@ -1503,7 +2321,7 @@ Bug fixes
 Enhancements
 
 * implicitly require unknown formatters so you don't have to require the file
-  explicitly on the commmand line (Michael Grosser)
+  explicitly on the command line (Michael Grosser)
 * add --out/-o option to assign output target
 * added fail_fast configuration option to abort on first failure
 * support a Hash subject (its([:key]) { should == value }) (Josep M. Bach)

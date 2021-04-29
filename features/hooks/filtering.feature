@@ -14,6 +14,8 @@ Feature: filters
   end
   ```
 
+  Note that filtered `:context` hooks will still be applied to individual examples with matching metadata -- in effect, every example has a singleton example group containing just the one example (analogous to Ruby's singleton classes).
+
   You can also specify metadata using only symbols.
 
   Scenario: Filter `before(:example)` hooks using arbitrary metadata
@@ -127,6 +129,10 @@ Feature: filters
             expect(@hook).to be_nil
           end
 
+          it "runs the hook for a single example with matching metadata", :foo => :bar do
+            expect(@hook).to eq(:before_context_foo_bar)
+          end
+
           describe "a nested subgroup with matching metadata", :foo => :bar do
             it "runs the hook" do
               expect(@hook).to eq(:before_context_foo_bar)
@@ -166,31 +172,37 @@ Feature: filters
           it "does not run the hook" do
             puts "unfiltered"
           end
+
+          it "runs the hook for a single example with matching metadata", :foo => :bar do
+            puts "filtered 1"
+          end
         end
 
         describe "a group with matching metadata", :foo => :bar do
           it "runs the hook" do
-            puts "filtered 1"
+            puts "filtered 2"
           end
         end
 
         describe "another group without matching metadata" do
           describe "a nested subgroup with matching metadata", :foo => :bar do
             it "runs the hook" do
-              puts "filtered 2"
+              puts "filtered 3"
             end
           end
         end
       end
       """
-    When I run `rspec --format progress filter_after_context_hooks_spec.rb`
+    When I run `rspec --format progress filter_after_context_hooks_spec.rb --order defined`
     Then the examples should all pass
     And the output should contain:
       """
       unfiltered
       .filtered 1
+      after :context
+      .filtered 2
       .after :context
-      filtered 2
+      filtered 3
       .after :context
       """
 
@@ -232,3 +244,186 @@ Feature: filters
       .after context
       """
 
+  Scenario: Filtering hooks using symbols
+    Given a file named "filter_example_hooks_with_symbol_spec.rb" with:
+      """ruby
+      RSpec.configure do |config|
+        config.before(:example, :foo) do
+          invoked_hooks << :before_example_foo_bar
+        end
+      end
+
+      RSpec.describe "a filtered before :example hook" do
+        let(:invoked_hooks) { [] }
+
+        describe "group without a matching metadata key" do
+          it "does not run the hook" do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "does not run the hook for an example with metadata hash containing the key with a falsey value", :foo => nil do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "runs the hook for an example with metadata hash containing the key with a truthy value", :foo => :bar do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+
+          it "runs the hook for an example with only the key defined", :foo do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+
+        describe "group with matching metadata key", :foo do
+          it "runs the hook" do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+      end
+      """
+    When I run `rspec filter_example_hooks_with_symbol_spec.rb`
+    Then the examples should all pass
+
+  Scenario: Filtering hooks using a hash
+    Given a file named "filter_example_hooks_with_hash_spec.rb" with:
+      """ruby
+      RSpec.configure do |config|
+        config.before(:example, :foo => { :bar => :baz, :slow => true }) do
+          invoked_hooks << :before_example_foo_bar
+        end
+      end
+
+      RSpec.describe "a filtered before :example hook" do
+        let(:invoked_hooks) { [] }
+
+        describe "group without matching metadata" do
+          it "does not run the hook" do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "does not run the hook for an example if only part of the filter matches", :foo => { :bar => :baz } do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "runs the hook for an example if the metadata contains all key value pairs from the filter", :foo => { :bar => :baz, :slow => true, :extra => :pair } do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+
+        describe "group with matching metadata", :foo => { :bar => :baz, :slow => true } do
+          it "runs the hook" do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+      end
+      """
+    When I run `rspec filter_example_hooks_with_hash_spec.rb`
+    Then the examples should all pass
+
+  Scenario: Filtering hooks using a Proc
+    Given a file named "filter_example_hooks_with_proc_spec.rb" with:
+      """ruby
+      RSpec.configure do |config|
+        config.before(:example, :foo => Proc.new { |value| value.is_a?(String) } ) do
+          invoked_hooks << :before_example_foo_bar
+        end
+      end
+
+      RSpec.describe "a filtered before :example hook" do
+        let(:invoked_hooks) { [] }
+
+        describe "group without matching metadata" do
+          it "does not run the hook" do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "does not run the hook if the proc returns false", :foo => :bar do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "runs the hook if the proc returns true", :foo => 'bar' do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+
+        describe "group with matching metadata", :foo => 'bar' do
+          it "runs the hook" do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+      end
+      """
+    When I run `rspec filter_example_hooks_with_proc_spec.rb`
+    Then the examples should all pass
+
+  Scenario: Filtering hooks using a regular expression
+    Given a file named "filter_example_hooks_with_regexp_spec.rb" with:
+      """ruby
+      RSpec.configure do |config|
+        config.before(:example, :foo => /bar/ ) do
+          invoked_hooks << :before_example_foo_bar
+        end
+      end
+
+      RSpec.describe "a filtered before :example hook" do
+        let(:invoked_hooks) { [] }
+
+        describe "group without matching metadata" do
+          it "does not run the hook" do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "does not run the hook if the value does not match", :foo => 'baz' do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "runs the hook if the value matches", :foo => 'bar' do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+
+        describe "group with matching metadata", :foo => 'bar' do
+          it "runs the hook" do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+      end
+      """
+    When I run `rspec filter_example_hooks_with_regexp_spec.rb`
+    Then the examples should all pass
+
+  Scenario: Filtering hooks using string comparison
+    Given a file named "filter_example_hooks_with_strcmp_spec.rb" with:
+      """ruby
+      RSpec.configure do |config|
+        config.before(:example, :foo => :bar ) do
+          invoked_hooks << :before_example_foo_bar
+        end
+      end
+
+      RSpec.describe "a filtered before :example hook" do
+        let(:invoked_hooks) { [] }
+
+        describe "group without matching metadata" do
+          it "does not run the hook" do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "does not run the hook if the coerced values do not match", :foo => 'baz' do
+            expect(invoked_hooks).to be_empty
+          end
+
+          it "runs the hook if the coerced values match", :foo => 'bar' do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+
+        describe "group with matching metadata", :foo => 'bar' do
+          it "runs the hook" do
+            expect(invoked_hooks).to eq([:before_example_foo_bar])
+          end
+        end
+      end
+      """
+    When I run `rspec filter_example_hooks_with_strcmp_spec.rb`
+    Then the examples should all pass

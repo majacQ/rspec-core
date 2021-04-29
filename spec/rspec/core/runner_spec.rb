@@ -1,5 +1,5 @@
-require 'spec_helper'
 require 'rspec/core/drb'
+require 'support/runner_support'
 
 module RSpec::Core
   RSpec.describe Runner do
@@ -21,10 +21,29 @@ module RSpec::Core
       end
     end
 
-    describe 'at_exit' do
+    describe '.autorun' do
+      before do
+        @original_ivars = Hash[ Runner.instance_variables.map do |ivar|
+          [ivar, Runner.instance_variable_get(ivar)]
+        end ]
+      end
+
+      after do
+        (@original_ivars.keys | Runner.instance_variables).each do |ivar|
+          if @original_ivars.key?(ivar)
+            Runner.instance_variable_set(ivar, @original_ivars[ivar])
+          else
+            Runner.remove_instance_variable(ivar)
+          end
+        end
+      end
+
       it 'sets an at_exit hook if none is already set' do
-        allow(RSpec::Core::Runner).to receive(:autorun_disabled?).and_return(false)
-        allow(RSpec::Core::Runner).to receive(:installed_at_exit?).and_return(false)
+        Runner.instance_eval do
+          @autorun_disabled = false
+          @installed_at_exit = false
+        end
+
         allow(RSpec::Core::Runner).to receive(:running_in_drb?).and_return(false)
         allow(RSpec::Core::Runner).to receive(:invoke)
         expect(RSpec::Core::Runner).to receive(:at_exit)
@@ -32,40 +51,228 @@ module RSpec::Core
       end
 
       it 'does not set the at_exit hook if it is already set' do
-        allow(RSpec::Core::Runner).to receive(:autorun_disabled?).and_return(false)
-        allow(RSpec::Core::Runner).to receive(:installed_at_exit?).and_return(true)
+        Runner.instance_eval do
+          @autorun_disabled = false
+          @installed_at_exit = true
+        end
+
         allow(RSpec::Core::Runner).to receive(:running_in_drb?).and_return(false)
         expect(RSpec::Core::Runner).to receive(:at_exit).never
         RSpec::Core::Runner.autorun
       end
     end
 
+    describe "at_exit hook" do
+      before { allow(Runner).to receive(:invoke) }
+
+      it 'normally runs the spec suite' do
+        Runner.perform_at_exit
+        expect(Runner).to have_received(:invoke)
+      end
+
+      it 'does not run the suite if an error triggered the exit' do
+        begin
+          raise "boom"
+        rescue
+          Runner.perform_at_exit
+        end
+
+        expect(Runner).not_to have_received(:invoke)
+      end
+
+      it 'stil runs the suite if a `SystemExit` occurs since that is caused by `Kernel#exit`' do
+        begin
+          exit
+        rescue SystemExit
+          Runner.perform_at_exit
+        end
+
+        expect(Runner).to have_received(:invoke)
+      end
+    end
+
+    describe "interrupt handling" do
+      before { allow(Runner).to receive(:exit!) }
+
+      it 'prints a message the first time, then exits the second time' do
+        expect {
+          Runner.handle_interrupt
+        }.to output(/shutting down/).to_stderr_from_any_process &
+          change { RSpec.world.wants_to_quit }.from(a_falsey_value).to(true)
+
+        expect(Runner).not_to have_received(:exit!)
+
+        expect {
+          Runner.handle_interrupt
+        }.not_to output.to_stderr_from_any_process
+
+        expect(Runner).to have_received(:exit!)
+      end
+    end
+
+    describe "interrupt catching" do
+      let(:interrupt_handlers) { [] }
+
+      before do
+        allow(Runner).to receive(:trap).with("INT", any_args) do |&block|
+          interrupt_handlers << block
+        end
+      end
+
+      def interrupt
+        interrupt_handlers.each(&:call)
+      end
+
+      it "adds a handler for SIGINT" do
+        expect(interrupt_handlers).to be_empty
+        Runner.send(:trap_interrupt)
+        expect(interrupt_handlers.size).to eq(1)
+      end
+
+      context "with SIGINT once" do
+        it "aborts processing" do
+          Runner.send(:trap_interrupt)
+          expect(Runner).to receive(:handle_interrupt)
+          interrupt
+        end
+
+        it "does not exit immediately, but notifies the user" do
+          Runner.send(:trap_interrupt)
+          expect(Runner).not_to receive(:exit)
+          expect(Runner).not_to receive(:exit!)
+
+          expect { interrupt }.to output(/RSpec is shutting down/).to_stderr
+        end
+      end
+
+      context "with SIGINT twice" do
+        it "exits immediately" do
+          Runner.send(:trap_interrupt)
+          expect(Runner).to receive(:exit!).with(1)
+          expect { interrupt }.to output(//).to_stderr
+          interrupt
+        end
+      end
+    end
+
     # This is intermittently slow because this method calls out to the network
     # interface.
     describe ".running_in_drb?", :slow do
-      it "returns true if drb server is started with 127.0.0.1" do
-        allow(::DRb).to receive(:current_server).and_return(double(:uri => "druby://127.0.0.1:0000/"))
+      subject { RSpec::Core::Runner.running_in_drb? }
 
-        expect(RSpec::Core::Runner.running_in_drb?).to be_truthy
+      before do
+        allow(::DRb).to receive(:current_server) { drb_server }
+
+        # To deal with some network weirdness at my workplace, I had to
+        # configure my network adapter in a non-standard way that causes
+        # `IPSocket.getaddress(Socket.gethostname)` to raise
+        # `SocketError: getaddrinfo: nodename nor servname provided, or not known`
+        # I'm not sure why this happens, but to keep the specs here passing,
+        # I have to stub this out :(.
+        allow(IPSocket).to receive(:getaddress) { "127.0.0.1" }
       end
 
-      it "returns true if drb server is started with localhost" do
-        allow(::DRb).to receive(:current_server).and_return(double(:uri => "druby://localhost:0000/"))
+      context "when drb server is started with 127.0.0.1" do
+        let(:drb_server) do
+          instance_double(::DRb::DRbServer, :uri => "druby://127.0.0.1:0000/", :alive? => true)
+        end
 
-        expect(RSpec::Core::Runner.running_in_drb?).to be_truthy
+        it { is_expected.to be_truthy }
       end
 
-      it "returns true if drb server is started with another local ip address" do
-        allow(::DRb).to receive(:current_server).and_return(double(:uri => "druby://192.168.0.1:0000/"))
-        allow(::IPSocket).to receive(:getaddress).and_return("192.168.0.1")
+      context "when drb server is started with localhost" do
+        let(:drb_server) do
+          instance_double(::DRb::DRbServer, :uri => "druby://localhost:0000/", :alive? => true)
+        end
 
-        expect(RSpec::Core::Runner.running_in_drb?).to be_truthy
+        it { is_expected.to be_truthy }
       end
 
-      it "returns false if no drb server is running" do
-        allow(::DRb).to receive(:current_server).and_raise(::DRb::DRbServerNotFound)
+      context "when drb server is started with another local ip address" do
+        let(:drb_server) do
+          instance_double(::DRb::DRbServer, :uri => "druby://192.168.0.1:0000/", :alive? => true)
+        end
 
-        expect(RSpec::Core::Runner.running_in_drb?).to be_falsey
+        before do
+          allow(::IPSocket).to receive(:getaddress).and_return("192.168.0.1")
+        end
+
+        it { is_expected.to be_truthy }
+      end
+
+      context "when drb server is started with 127.0.0.1 but not alive" do
+        let(:drb_server) do
+          instance_double(::DRb::DRbServer, :uri => "druby://127.0.0.1:0000/", :alive? => false)
+        end
+
+        it { is_expected.to be_falsey }
+      end
+
+      context "when IPSocket cannot resolve the current hostname" do
+        let(:drb_server) do
+          instance_double(::DRb::DRbServer, :uri => "druby://localhost:0000/", :alive? => true)
+        end
+
+        before do
+          allow(::IPSocket).to receive(:getaddress).and_raise(
+            SocketError, "getaddrinfo: nodename nor servname provided, or not known"
+          )
+        end
+
+        it { is_expected.to be_falsey }
+      end
+
+      context "when no drb server is running" do
+        let(:drb_server) do
+          raise ::DRb::DRbServerNotFound
+        end
+
+        it { is_expected.to be_falsey }
+      end
+    end
+
+    describe '#exit_code' do
+      let(:world) { World.new }
+      let(:config) { Configuration.new }
+      let(:runner) { Runner.new({}, config, world) }
+
+      it 'defaults to 1' do
+        expect(runner.exit_code).to eq 1
+      end
+
+      it 'is failure_exit_code by default' do
+        config.failure_exit_code = 2
+        expect(runner.exit_code).to eq 2
+      end
+
+      it 'is failure_exit_code when world is errored by default' do
+        world.non_example_failure = true
+        config.failure_exit_code = 2
+        expect(runner.exit_code).to eq 2
+      end
+
+      it 'is error_exit_code when world is errored by and both are defined' do
+        world.non_example_failure = true
+        config.failure_exit_code = 2
+        config.error_exit_code = 3
+        expect(runner.exit_code).to eq 3
+      end
+
+      it 'is error_exit_code when world is errored by and failure exit code is not defined' do
+        world.non_example_failure = true
+        config.error_exit_code = 3
+        expect(runner.exit_code).to eq 3
+      end
+
+      it 'can be given success' do
+        config.error_exit_code = 3
+        expect(runner.exit_code(true)).to eq 0
+      end
+
+      it 'can be given success, but non_example_failure=true will still cause an error code' do
+        world.non_example_failure = true
+        config.error_exit_code = 3
+        expect(runner.exit_code(true)).to eq 3
       end
     end
 
@@ -92,60 +299,42 @@ module RSpec::Core
     end
 
     describe ".run" do
+      let(:args) { double(:args) }
       let(:err) { StringIO.new }
       let(:out) { StringIO.new }
+      let(:options) { { } }
+      let(:configuration_options) { double(:configuration_options, :options => options) }
 
-      context "with --drb or -X" do
-        before(:each) do
-          @options = RSpec::Core::ConfigurationOptions.new(%w[--drb --drb-port 8181 --color])
-          allow(RSpec::Core::ConfigurationOptions).to receive(:new) { @options }
+      before(:each) do
+        allow(RSpec::Core::ConfigurationOptions).to receive(:new).and_return(configuration_options)
+      end
+
+      context 'when the options contain a runner callable' do
+        let(:runner) { double(:runner, :call => nil) }
+        let(:options) { { :runner => runner } }
+
+        it 'invokes the runner callable' do
+          RSpec::Core::Runner.run([], err, out)
+
+          expect(runner).to have_received(:call).with(configuration_options, err, out)
         end
+      end
 
-        def run_specs
-          RSpec::Core::Runner.run(%w[ --drb ], err, out)
-        end
+      context 'when no runner callable is set' do
+        it 'instantiates a Runner instance and runs it' do
+          process_proxy = double(RSpec::Core::Runner, :run => 0)
+          allow(RSpec::Core::Runner).to receive(:new).and_return(process_proxy)
 
-        context 'and a DRb server is running' do
-          it "builds a DRbRunner and runs the specs" do
-            drb_proxy = double(RSpec::Core::DRbRunner, :run => true)
-            expect(drb_proxy).to receive(:run).with(err, out)
+          RSpec::Core::Runner.run([], err, out)
 
-            expect(RSpec::Core::DRbRunner).to receive(:new).and_return(drb_proxy)
-
-            run_specs
-          end
-        end
-
-        context 'and a DRb server is not running' do
-          before(:each) do
-            expect(RSpec::Core::DRbRunner).to receive(:new).and_raise(DRb::DRbConnError)
-          end
-
-          it "outputs a message" do
-            allow(RSpec.configuration).to receive(:files_to_run) { [] }
-            expect(err).to receive(:puts).with(
-              "No DRb server is running. Running in local process instead ..."
-            )
-            run_specs
-          end
-
-          it "builds a runner instance and runs the specs" do
-            process_proxy = double(RSpec::Core::Runner, :run => 0)
-            expect(process_proxy).to receive(:run).with(err, out)
-
-            expect(RSpec::Core::Runner).to receive(:new).and_return(process_proxy)
-
-            run_specs
-          end
+          expect(RSpec::Core::Runner).to have_received(:new)
+          expect(process_proxy).to have_received(:run).with(err, out)
         end
       end
     end
 
     context "when run" do
-      let(:out)    { StringIO.new         }
-      let(:err)    { StringIO.new         }
-      let(:config) { RSpec.configuration  }
-      let(:world)  { RSpec.world          }
+      include_context "Runner support"
 
       before do
         allow(config.hooks).to receive(:run)
@@ -168,7 +357,7 @@ module RSpec::Core
       end
 
       it "assigns submitted ConfigurationOptions to @options" do
-        config_options = ConfigurationOptions.new(%w[--color])
+        config_options = ConfigurationOptions.new(%w[--no-color])
         runner         = Runner.new(config_options)
         expect(runner.instance_exec { @options }).to be(config_options)
       end
@@ -239,6 +428,45 @@ module RSpec::Core
           end
         end
 
+        describe "persistence of example statuses" do
+          let(:all_examples) { [double("example")] }
+
+          def run
+            allow(world).to receive(:all_examples).and_return(all_examples)
+            allow(config).to receive(:load_spec_files)
+
+            class_spy(ExampleStatusPersister, :load_from => []).as_stubbed_const
+
+            runner = build_runner
+            runner.run(err, out)
+          end
+
+          context "when `example_status_persistence_file_path` is configured" do
+            it 'persists the status of all loaded examples' do
+              config.example_status_persistence_file_path = "examples.txt"
+              run
+              expect(ExampleStatusPersister).to have_received(:persist).with(all_examples, "examples.txt")
+            end
+          end
+
+          context "with --dry-run" do
+            it "doesn't persist example status" do
+              config.example_status_persistence_file_path = "examples.txt"
+              config.dry_run = true
+              run
+              expect(ExampleStatusPersister).not_to have_received(:persist)
+            end
+          end
+
+          context "when `example_status_persistence_file_path` is not configured" do
+            it "doesn't persist example status" do
+              config.example_status_persistence_file_path = nil
+              run
+              expect(ExampleStatusPersister).not_to have_received(:persist)
+            end
+          end
+        end
+
         context "running files" do
           include_context "spec files"
 
@@ -257,31 +485,6 @@ module RSpec::Core
             expect(runner.run(err, out)).to eq 2
           end
         end
-
-        context "running hooks" do
-          before { allow(config).to receive :load_spec_files }
-
-          it "runs before suite hooks" do
-            expect(config.hooks).to receive(:run).with(:before, :suite, instance_of(SuiteHookContext))
-            runner = build_runner
-            runner.run err, out
-          end
-
-          it "runs after suite hooks" do
-            expect(config.hooks).to receive(:run).with(:after, :suite, instance_of(SuiteHookContext))
-            runner = build_runner
-            runner.run err, out
-          end
-
-          it "runs after suite hooks even after an error" do
-            expect(config.hooks).to receive(:run).with(:before, :suite, instance_of(SuiteHookContext)).and_raise "this error"
-            expect(config.hooks).to receive(:run).with(:after , :suite, instance_of(SuiteHookContext))
-            expect do
-              runner = build_runner
-              runner.run err, out
-            end.to raise_error("this error")
-          end
-        end
       end
 
       describe "#run with custom output" do
@@ -295,14 +498,6 @@ module RSpec::Core
           runner.run err, nil
           expect(runner.instance_exec { @configuration.output_stream }).to eq output_file
         end
-      end
-
-      def build_runner *args
-        Runner.new build_config_options(*args)
-      end
-
-      def build_config_options *args
-        ConfigurationOptions.new args
       end
     end
   end

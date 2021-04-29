@@ -6,13 +6,15 @@ module RSpec
     module Formatters
       # @private
       class JsonFormatter < BaseFormatter
-        Formatters.register self, :message, :dump_summary, :dump_profile, :stop, :close
+        Formatters.register self, :message, :dump_summary, :dump_profile, :stop, :seed, :close
 
         attr_reader :output_hash
 
         def initialize(output)
           super
-          @output_hash = {}
+          @output_hash = {
+            :version => RSpec::Core::Version::STRING
+          }
         end
 
         def message(notification)
@@ -24,7 +26,8 @@ module RSpec
             :duration => summary.duration,
             :example_count => summary.example_count,
             :failure_count => summary.failure_count,
-            :pending_count => summary.pending_count
+            :pending_count => summary.pending_count,
+            :errors_outside_of_examples_count => summary.errors_outside_of_examples_count
           }
           @output_hash[:summary_line] = summary.totals_line
         end
@@ -44,9 +47,13 @@ module RSpec
           end
         end
 
+        def seed(notification)
+          return unless notification.seed_used?
+          @output_hash[:seed] = notification.seed
+        end
+
         def close(_notification)
           output.write @output_hash.to_json
-          output.close if IO === output && output != $stdout
         end
 
         def dump_profile(profile)
@@ -58,8 +65,7 @@ module RSpec
         # @api private
         def dump_profile_slowest_examples(profile)
           @output_hash[:profile] = {}
-          sorted_examples = profile.slowest_examples
-          @output_hash[:profile][:examples] = sorted_examples.map do |example|
+          @output_hash[:profile][:examples] = profile.slowest_examples.map do |example|
             format_example(example).tap do |hash|
               hash[:run_time] = example.execution_result.run_time
             end
@@ -80,12 +86,14 @@ module RSpec
 
         def format_example(example)
           {
+            :id => example.id,
             :description => example.description,
             :full_description => example.full_description,
             :status => example.execution_result.status.to_s,
             :file_path => example.metadata[:file_path],
             :line_number  => example.metadata[:line_number],
-            :run_time => example.execution_result.run_time
+            :run_time => example.execution_result.run_time,
+            :pending_message => example.execution_result.pending_message,
           }
         end
       end
