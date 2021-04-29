@@ -1,77 +1,80 @@
-require_rspec = if defined?(require_relative)
-  lambda do |path|
-    require_relative path
-  end
-else
-  lambda do |path|
-    require "rspec/#{path}"
-  end
-end
+# rubocop:disable Style/GlobalVars
+$_rspec_core_load_started_at = Time.now
+# rubocop:enable Style/GlobalVars
 
-require 'set'
-require 'rbconfig'
-require_rspec['core/filter_manager']
-require_rspec['core/dsl']
-require_rspec['core/extensions/kernel']
-require_rspec['core/extensions/instance_eval_with_args']
-require_rspec['core/extensions/module_eval_with_args']
-require_rspec['core/extensions/ordered']
-require_rspec['core/load_path']
-require_rspec['core/deprecation']
-require_rspec['core/backward_compatibility']
-require_rspec['core/reporter']
+require "rspec/support"
+RSpec::Support.require_rspec_support "caller_filter"
 
-require_rspec['core/metadata_hash_builder']
-require_rspec['core/hooks']
-require_rspec['core/subject']
-require_rspec['core/let']
-require_rspec['core/metadata']
-require_rspec['core/pending']
-require_rspec['core/formatters']
+RSpec::Support.define_optimized_require_for_rspec(:core) { |f| require_relative f }
 
-require_rspec['core/world']
-require_rspec['core/configuration']
-require_rspec['core/project_initializer']
-require_rspec['core/option_parser']
-require_rspec['core/configuration_options']
-require_rspec['core/command_line']
-require_rspec['core/runner']
-require_rspec['core/example']
-require_rspec['core/shared_example_group']
-require_rspec['core/example_group']
-require_rspec['core/version']
+%w[
+  version
+  warnings
 
+  set
+  filter_manager
+  dsl
+  notifications
+  reporter
+
+  hooks
+  memoized_helpers
+  metadata
+  metadata_filter
+  pending
+  formatters
+  ordering
+
+  world
+  configuration
+  option_parser
+  configuration_options
+  runner
+  invocations
+  example
+  shared_example_group
+  example_group
+].each { |name| RSpec::Support.require_rspec_core name }
+
+# Namespace for all core RSpec code.
 module RSpec
   autoload :SharedContext, 'rspec/core/shared_context'
 
-  # @private
-  def self.wants_to_quit
-  # Used internally to determine what to do when a SIGINT is received
-    world.wants_to_quit
+  extend RSpec::Core::Warnings
+
+  class << self
+    # Setters for shared global objects
+    # @api private
+    attr_writer :configuration, :world
   end
 
-  # @private
-  # Used internally to determine what to do when a SIGINT is received
-  def self.wants_to_quit=(maybe)
-    world.wants_to_quit=(maybe)
-  end
-
-  # @private
-  # Internal container for global non-configuration data
-  def self.world
-    @world ||= RSpec::Core::World.new
-  end
-
-  # @private
-  # Used internally to ensure examples get reloaded between multiple runs in
-  # the same process.
+  # Used to ensure examples get reloaded and user configuration gets reset to
+  # defaults between multiple runs in the same process.
+  #
+  # Users must invoke this if they want to have the configuration reset when
+  # they use the runner multiple times within the same process. Users must deal
+  # themselves with re-configuration of RSpec before run.
   def self.reset
+    RSpec::ExampleGroups.remove_all_constants
     @world = nil
     @configuration = nil
   end
 
-  # Returns the global [Configuration](RSpec/Core/Configuration) object. While you
-  # _can_ use this method to access the configuration, the more common
+  # Used to ensure examples get reloaded between multiple runs in the same
+  # process and ensures user configuration is persisted.
+  #
+  # Users must invoke this if they want to clear all examples but preserve
+  # current configuration when they use the runner multiple times within the
+  # same process.
+  def self.clear_examples
+    world.reset
+    configuration.reset_reporter
+    configuration.start_time = ::RSpec::Core::Time.now
+    configuration.reset_filters
+  end
+
+  # Returns the global [Configuration](RSpec/Core/Configuration) object. While
+  # you _can_ use this method to access the configuration, the more common
   # convention is to use [RSpec.configure](RSpec#configure-class_method).
   #
   # @example
@@ -79,20 +82,6 @@ module RSpec
   # @see RSpec.configure
   # @see Core::Configuration
   def self.configuration
-    if block_given?
-      RSpec.warn_deprecation <<-WARNING
-
-*****************************************************************
-DEPRECATION WARNING
-
-* RSpec.configuration with a block is deprecated and has no effect.
-* please use RSpec.configure with a block instead.
-
-Called from #{caller(0)[1]}
-*****************************************************************
-
-WARNING
-    end
     @configuration ||= RSpec::Core::Configuration.new
   end
 
@@ -108,40 +97,69 @@ WARNING
     yield configuration if block_given?
   end
 
-  # @private
-  # Used internally to clear remaining groups when fail_fast is set
-  def self.clear_remaining_example_groups
-    world.example_groups.clear
+  # The example being executed.
+  #
+  # The primary audience for this method is library authors who need access
+  # to the example currently being executed.
+  def self.current_example
+    RSpec::Support.thread_local_data[:current_example]
+  end
+
+  # Set the current example being executed.
+  # @api private
+  def self.current_example=(example)
+    RSpec::Support.thread_local_data[:current_example] = example
   end
 
   # @private
-  def self.windows_os?
-    /mswin|mingw/ === ::RbConfig::CONFIG['host_os']
+  # Internal container for global non-configuration data.
+  def self.world
+    @world ||= RSpec::Core::World.new
   end
 
+  # Namespace for the rspec-core code.
   module Core
+    autoload :ExampleStatusPersister, "rspec/core/example_status_persister"
+    autoload :Profiler,               "rspec/core/profiler"
+    autoload :DidYouMean,             "rspec/core/did_you_mean"
+
     # @private
     # This avoids issues with reporting time caused by examples that
     # change the value/meaning of Time.now without properly restoring
     # it.
-    Time = ::Time.dup
-  end
+    class Time
+      class << self
+        define_method(:now, &::Time.method(:now))
+      end
+    end
 
-  def self.const_missing(name)
-    case name
-      when :Matchers
-        # Load rspec-expectations when RSpec::Matchers is referenced. This allows
-        # people to define custom matchers (using `RSpec::Matchers.define`) before
-        # rspec-core has loaded rspec-expectations (since it delays the loading of
-        # it to allow users to configure a different assertion/expectation
-        # framework). `autoload` can't be used since it works with ruby's built-in
-        # require (e.g. for files that are available relative to a load path dir),
-        # but not with rubygems' extended require.
-        require 'rspec/expectations'
-        ::RSpec::Matchers
-      else super
+    # @private path to executable file.
+    def self.path_to_executable
+      @path_to_executable ||= File.expand_path('../../../exe/rspec', __FILE__)
     end
   end
-end
 
-require_rspec['core/backward_compatibility']
+  # @private
+  MODULES_TO_AUTOLOAD = {
+    :Matchers     => "rspec/expectations",
+    :Expectations => "rspec/expectations",
+    :Mocks        => "rspec/mocks"
+  }
+
+  # @private
+  def self.const_missing(name)
+    # Load rspec-expectations when RSpec::Matchers is referenced. This allows
+    # people to define custom matchers (using `RSpec::Matchers.define`) before
+    # rspec-core has loaded rspec-expectations (since it delays the loading of
+    # it to allow users to configure a different assertion/expectation
+    # framework). `autoload` can't be used since it works with ruby's built-in
+    # require (e.g. for files that are available relative to a load path dir),
+    # but not with rubygems' extended require.
+    #
+    # As of rspec 2.14.1, we no longer require `rspec/mocks` and
+    # `rspec/expectations` when `rspec` is required, so we want
+    # to make them available as an autoload.
+    require MODULES_TO_AUTOLOAD.fetch(name) { return super }
+    ::RSpec.const_get(name)
+  end
+end

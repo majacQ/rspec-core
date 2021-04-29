@@ -1,25 +1,42 @@
-source "http://rubygems.org"
+source "https://rubygems.org"
 
 gemspec
 
-%w[rspec rspec-expectations rspec-mocks].each do |lib|
+branch = File.read(File.expand_path("../maintenance-branch", __FILE__)).chomp
+%w[rspec rspec-expectations rspec-mocks rspec-support].each do |lib|
   library_path = File.expand_path("../../#{lib}", __FILE__)
-  if File.exist?(library_path)
+  if File.exist?(library_path) && !ENV['USE_GIT_REPOS']
     gem lib, :path => library_path
   else
-    gem lib, :git => "git://github.com/rspec/#{lib}.git"
+    gem lib, :git => "https://github.com/rspec/#{lib}.git", :branch => branch
   end
 end
 
+gem 'yard', '~> 0.9.24', :require => false
+
 ### deps for rdoc.info
-platforms :ruby do
-  gem 'yard',          '0.8.0', :require => false
-  gem 'redcarpet',     '2.1.1'
-  gem 'github-markup', '0.7.2'
+group :documentation do
+  gem 'redcarpet', :platform => :mri
+  gem 'github-markup', :platform => :mri
 end
 
-platforms :jruby do
-  gem "jruby-openssl"
+# Until 1.13.2 is released due to Rubygems usage
+gem 'ffi', '~> 1.12.0'
+
+gem "jruby-openssl", platforms: :jruby
+
+gem 'simplecov', '~> 0.8'
+
+# No need to run rubocop on earlier versions
+if RUBY_VERSION >= '2.4' && RUBY_ENGINE == 'ruby'
+  gem "rubocop", "~> 0.52.1"
+end
+
+gem 'test-unit', '~> 3.0'
+
+# Version 5.12 of minitest requires Ruby 2.4
+if RUBY_VERSION < '2.4.0'
+  gem 'minitest', '< 5.12.0'
 end
 
 eval File.read('Gemfile-custom') if File.exist?('Gemfile-custom')

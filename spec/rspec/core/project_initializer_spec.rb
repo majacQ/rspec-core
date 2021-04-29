@@ -1,53 +1,55 @@
-require "spec_helper"
+require 'rspec/core/project_initializer'
 
 module RSpec::Core
-  describe ProjectInitializer, :isolated_directory => true do
+  RSpec.describe ProjectInitializer, :isolated_directory => true do
 
     describe "#run" do
       context "with no args" do
-        let(:command_line_config) { ProjectInitializer.new }
+        subject(:command_line_config) { ProjectInitializer.new(:report_stream => output) }
 
-        before do
-          command_line_config.stub(:warn)
-          command_line_config.stub(:puts)
-          command_line_config.stub(:gets => 'no')
-        end
+        let(:output) { StringIO.new }
 
         context "with no .rspec file" do
           it "says it's creating .rspec " do
-            command_line_config.should_receive(:puts).with(/create\s+\.rspec/)
-            command_line_config.run
+            expect{ command_line_config.run }.to change{
+              output.rewind
+              output.read
+            }.to(include 'create   .rspec')
           end
 
           it "generates a .rspec" do
             command_line_config.run
-            File.read('.rspec').should =~ /--color\n--format progress/m
+            expect(File.read('.rspec')).to match(/--require spec_helper/m)
           end
         end
 
         context "with a .rspec file" do
           it "says .rspec exists" do
             FileUtils.touch('.rspec')
-            command_line_config.should_receive(:puts).with(/exist\s+\.rspec/)
-            command_line_config.run
+            expect{ command_line_config.run }.to change{
+              output.rewind
+              output.read
+            }.to(include 'exist   .rspec')
           end
 
           it "doesn't create a new one" do
-            File.open('.rspec', 'w') {|f| f << '--color'}
+            File.open('.rspec', 'w') {|f| f << '--not-a-real-flag'}
             command_line_config.run
-            File.read('.rspec').should eq('--color')
+            expect(File.read('.rspec')).to eq('--not-a-real-flag')
           end
         end
 
         context "with no spec/spec_helper.rb file" do
           it "says it's creating spec/spec_helper.rb " do
-            command_line_config.should_receive(:puts).with(/create\s+spec\/spec_helper.rb/)
-            command_line_config.run
+            expect{ command_line_config.run }.to change{
+              output.rewind
+              output.read
+            }.to(include 'create   spec/spec_helper.rb')
           end
 
           it "generates a spec/spec_helper.rb" do
             command_line_config.run
-            File.read('spec/spec_helper.rb').should =~ /RSpec\.configure do \|config\|/m
+            expect(File.read('spec/spec_helper.rb')).to match(/RSpec\.configure do \|config\|/m)
           end
         end
 
@@ -56,75 +58,65 @@ module RSpec::Core
 
           it "says spec/spec_helper.rb exists" do
             FileUtils.touch('spec/spec_helper.rb')
-            command_line_config.should_receive(:puts).with(/exist\s+spec\/spec_helper.rb/)
-            command_line_config.run
+            expect{ command_line_config.run }.to change{
+              output.rewind
+              output.read
+            }.to(include 'exist   spec/spec_helper.rb')
           end
 
           it "doesn't create a new one" do
             random_content = "content #{rand}"
             File.open('spec/spec_helper.rb', 'w') {|f| f << random_content}
             command_line_config.run
-            File.read('spec/spec_helper.rb').should eq(random_content)
+            expect(File.read('spec/spec_helper.rb')).to eq(random_content)
           end
-        end
-
-        context "with autotest/discover.rb" do
-          before do
-            FileUtils.mkdir('autotest')
-            FileUtils.touch 'autotest/discover.rb'
-          end
-
-          it "asks whether to delete the file" do
-            command_line_config.should_receive(:puts).with(/delete/)
-            command_line_config.run
-          end
-
-          it "removes it if confirmed" do
-            command_line_config.stub(:gets => 'yes')
-            command_line_config.run
-            File.exist?('autotest/discover.rb').should be_false
-          end
-
-          it "leaves it if not confirmed" do
-            command_line_config.stub(:gets => 'no')
-            command_line_config.run
-            File.exist?('autotest/discover.rb').should be_true
-          end
-        end
-
-        context "with lib/tasks/rspec.rake" do
-          before do
-            FileUtils.mkdir_p('lib/tasks')
-            FileUtils.touch 'lib/tasks/rspec.rake'
-          end
-
-          it "asks whether to delete the file" do
-            command_line_config.should_receive(:puts).with(/delete/)
-            command_line_config.run
-          end
-
-          it "removes it if confirmed" do
-            command_line_config.stub(:gets => 'yes')
-            command_line_config.run
-            File.exist?('lib/tasks/rspec.rake').should be_false
-          end
-
-          it "leaves it if not confirmed" do
-            command_line_config.stub(:gets => 'no')
-            command_line_config.run
-            File.exist?('lib/tasks/rspec.rake').should be_true
-          end
-        end
-      end
-
-      context "given an arg" do
-        it "warns if arg received (no longer necessary)" do
-          config = ProjectInitializer.new("another_arg")
-          config.stub(:puts)
-          config.stub(:gets => 'no')
-          config.run
         end
       end
     end
+
+    describe "#run", "with a target directory" do
+      subject(:command_line_config) {
+        ProjectInitializer.new(:destination => tmpdir, :report_stream => StringIO.new)
+      }
+
+      let(:tmpdir) { 'relative/destination/' }
+
+      before { FileUtils.mkdir_p(tmpdir) }
+
+      context "with no .rspec file" do
+        it "generates a .rspec" do
+          command_line_config.run
+          expect(File.read(File.join(tmpdir, '.rspec'))).to match(/--require spec_helper/m)
+        end
+      end
+
+      context "with a .rspec file" do
+        it "doesn't create a new one" do
+          dot_rspec_file = File.join(tmpdir, '.rspec')
+          File.open(dot_rspec_file, 'w') {|f| f << '--not-a-real-flag'}
+          command_line_config.run
+          expect(File.read(dot_rspec_file)).to eq('--not-a-real-flag')
+        end
+      end
+
+      context "with no spec/spec_helper.rb file" do
+        it "generates a spec/spec_helper.rb" do
+          command_line_config.run
+          expect(File.read(File.join(tmpdir, 'spec/spec_helper.rb'))).to match(/RSpec\.configure do \|config\|/m)
+        end
+      end
+
+      context "with a spec/spec_helper.rb file" do
+        it "doesn't create a new one" do
+          FileUtils.mkdir File.join(tmpdir, 'spec')
+          spec_helper_file = File.join(tmpdir, 'spec', 'spec_helper.rb')
+          random_content = "content #{rand}"
+          File.open(spec_helper_file, 'w') {|f| f << random_content}
+          command_line_config.run
+          expect(File.read(spec_helper_file)).to eq(random_content)
+        end
+      end
+    end
+
   end
 end

@@ -1,7 +1,9 @@
 module RSpec
   module Core
+    # Version information for RSpec Core.
     module Version
-      STRING = '2.12.2'
+      # Current version of RSpec Core, in semantic versioning format.
+      STRING = '4.0.0.pre'
     end
   end
 end

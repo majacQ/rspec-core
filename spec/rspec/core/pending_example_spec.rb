@@ -1,220 +1,221 @@
-require 'spec_helper'
-
-describe "an example" do
-  matcher :be_pending_with do |message|
-    match do |example|
-      example.pending? && example.metadata[:execution_result][:pending_message] == message
-    end
-
-    failure_message_for_should do |example|
-      "expected: example pending with #{message.inspect}\n     got: #{example.metadata[:execution_result][:pending_message].inspect}"
-    end
-  end
-
+RSpec.describe "an example" do
   context "declared pending with metadata" do
     it "uses the value assigned to :pending as the message" do
-      group = RSpec::Core::ExampleGroup.describe('group') do
+      group = RSpec.describe('group') do
         example "example", :pending => 'just because' do
+          fail
         end
       end
       example = group.examples.first
-      example.run(group.new, stub.as_null_object)
-      example.should be_pending_with('just because')
+      example.run(group.new, double.as_null_object)
+      expect(example).to be_pending_with('just because')
     end
 
     it "sets the message to 'No reason given' if :pending => true" do
-      group = RSpec::Core::ExampleGroup.describe('group') do
+      group = RSpec.describe('group') do
         example "example", :pending => true do
+          fail
         end
       end
       example = group.examples.first
-      example.run(group.new, stub.as_null_object)
-      example.should be_pending_with('No reason given')
+      example.run(group.new, double.as_null_object)
+      expect(example).to be_pending_with('No reason given')
+    end
+
+    it "passes if a mock expectation is not satisifed" do
+      group = RSpec.describe('group') do
+        example "example", :pending => "because" do
+          expect(RSpec).to receive(:a_message_in_a_bottle)
+        end
+      end
+
+      example = group.examples.first
+      example.run(group.new, double.as_null_object)
+      expect(example).to be_pending_with('because')
+      expect(example.execution_result.status).to eq(:pending)
+    end
+
+    it "does not mutate the :pending attribute of the user metadata when handling mock expectation errors" do
+      group = RSpec.describe('group') do
+        example "example", :pending => "because" do
+          expect(RSpec).to receive(:a_message_in_a_bottle)
+        end
+      end
+
+      group.run
+      example = group.examples.first
+      expect(example.metadata[:pending]).to be(true)
+    end
+  end
+
+  context "made pending with `define_derived_metadata`" do
+    before do
+      RSpec.configure do |config|
+        config.define_derived_metadata(:not_ready) do |meta|
+          meta[:pending] ||= "Not ready"
+        end
+      end
+    end
+
+    it 'has a pending result if there is an error' do
+      group = RSpec.describe "group" do
+        example "something", :not_ready do
+          boom
+        end
+      end
+
+      group.run
+      example = group.examples.first
+      expect(example).to be_pending_with("Not ready")
+    end
+
+    it 'fails if there is no error' do
+      group = RSpec.describe "group" do
+        example "something", :not_ready do
+        end
+      end
+
+      group.run
+      example = group.examples.first
+      expect(example.execution_result.status).to be(:failed)
+      expect(example.execution_result.exception.message).to include("Expected example to fail")
     end
   end
 
   context "with no block" do
     it "is listed as pending with 'Not yet implemented'" do
-      group = RSpec::Core::ExampleGroup.describe('group') do
+      group = RSpec.describe('group') do
         it "has no block"
       end
       example = group.examples.first
-      example.run(group.new, stub.as_null_object)
-      example.should be_pending_with('Not yet implemented')
+      example.run(group.new, double.as_null_object)
+      expect(example).to be_skipped_with('Not yet implemented')
     end
   end
 
   context "with no args" do
     it "is listed as pending with the default message" do
-      group = RSpec::Core::ExampleGroup.describe('group') do
+      group = RSpec.describe('group') do
+        it "does something" do
+          pending
+          fail
+        end
+      end
+      example = group.examples.first
+      example.run(group.new, double.as_null_object)
+      expect(example).to be_pending_with(RSpec::Core::Pending::NO_REASON_GIVEN)
+    end
+
+    it "fails when the rest of the example passes" do
+      called = false
+      group = RSpec.describe('group') do
+        it "does something" do
+          pending
+          called = true
+        end
+      end
+
+      example = group.examples.first
+      example.run(group.new, double.as_null_object)
+      expect(called).to eq(true)
+      result = example.execution_result
+      expect(result.pending_fixed).to eq(true)
+      expect(result.status).to eq(:failed)
+    end
+
+    it "does not mutate the :pending attribute of the user metadata when the rest of the example passes" do
+      group = RSpec.describe('group') do
         it "does something" do
           pending
         end
       end
+
+      group.run
       example = group.examples.first
-      example.run(group.new, stub.as_null_object)
-      example.should be_pending_with(RSpec::Core::Pending::NO_REASON_GIVEN)
+      expect(example.metadata).to include(:pending => true)
     end
   end
 
   context "with no docstring" do
     context "declared with the pending method" do
-      it "does not have an auto-generated description" do
-        group = RSpec::Core::ExampleGroup.describe('group') do
+      it "has an auto-generated description if it has an expectation" do
+        ex = nil
+
+        RSpec.describe('group') do
           it "checks something" do
-            (3+4).should eq(7)
+            expect((3+4)).to eq(7)
           end
-          pending do
-            "string".reverse.should eq("gnirts")
+          ex = pending do
+            expect("string".reverse).to eq("gnirts")
           end
-        end
-        example = group.examples.last
-        example.run(group.new, stub.as_null_object)
-        example.description.should match(/example at/)
+        end.run
+
+        expect(ex.description).to eq('is expected to eq "gnirts"')
       end
     end
 
     context "after another example with some assertion" do
       it "does not show any message" do
-        group = RSpec::Core::ExampleGroup.describe('group') do
+        ex = nil
+
+        RSpec.describe('group') do
           it "checks something" do
-            (3+4).should eq(7)
+            expect((3+4)).to eq(7)
           end
-          specify do
+          ex = specify do
             pending
           end
-        end
-        example = group.examples.last
-        example.run(group.new, stub.as_null_object)
-        example.description.should match(/example at/)
+        end.run
+
+        expect(ex.description).to match(/example at/)
       end
     end
   end
 
   context "with a message" do
     it "is listed as pending with the supplied message" do
-      group = RSpec::Core::ExampleGroup.describe('group') do
+      group = RSpec.describe('group') do
         it "does something" do
           pending("just because")
+          fail
         end
       end
       example = group.examples.first
-      example.run(group.new, stub.as_null_object)
-      example.should be_pending_with('just because')
+      example.run(group.new, double.as_null_object)
+      expect(example).to be_pending_with('just because')
     end
   end
 
   context "with a block" do
-    def run_example(*pending_args, &block)
-      group = RSpec::Core::ExampleGroup.describe('group') do
-        it "does something" do
-          pending(*pending_args) { block.call if block }
+    it "fails with an ArgumentError stating the syntax is deprecated" do
+      group = RSpec.describe('group') do
+        it "calls pending with a block" do
+          pending("with invalid syntax") do
+            :no_op
+          end
+          fail
         end
       end
       example = group.examples.first
-      example.run(group.new, stub.as_null_object)
-      example
+      group.run
+      expect(example).to fail_with ArgumentError
+      expect(example.exception.message).to match(
+        /Passing a block within an example is not supported./
+      )
     end
 
-    context "that fails" do
-      def run_example(*pending_args)
-        super(*pending_args) { raise ArgumentError.new }
-      end
-
-      context "when given no options" do
-        it "is listed as pending with the supplied message" do
-          run_example("just because").should be_pending_with("just because")
-        end
-
-        it "is listed as pending with the default message when no message is given" do
-          run_example.should be_pending_with(RSpec::Core::Pending::NO_REASON_GIVEN)
+    it "does not yield to the block" do
+      example_to_have_yielded = :did_not_yield
+      group = RSpec.describe('group') do
+        it "calls pending with a block" do
+          pending("just because") do
+            example_to_have_yielded = :pending_block
+          end
+          fail
         end
       end
-
-      context "when given a truthy :if option" do
-        it "is listed as pending with the supplied message" do
-          run_example("just because", :if => true).should be_pending_with("just because")
-        end
-
-        it "is listed as pending with the default message when no message is given" do
-          run_example(:if => true).should be_pending_with(RSpec::Core::Pending::NO_REASON_GIVEN)
-        end
-      end
-
-      context "when given a falsey :if option" do
-        it "runs the example and fails" do
-          run_example(                :if => false).should fail_with(ArgumentError)
-          run_example("just because", :if => false).should fail_with(ArgumentError)
-        end
-      end
-
-      context "when given a truthy :unless option" do
-        it "runs the example and fails" do
-          run_example(                :unless => true).should fail_with(ArgumentError)
-          run_example("just because", :unless => true).should fail_with(ArgumentError)
-        end
-      end
-
-      context "when given a falsey :unless option" do
-        it "is listed as pending with the supplied message" do
-          run_example("just because", :unless => false).should be_pending_with("just because")
-        end
-
-        it "is listed as pending with the default message when no message is given" do
-          run_example(:unless => false).should be_pending_with(RSpec::Core::Pending::NO_REASON_GIVEN)
-        end
-      end
-    end
-
-    context "that fails due to a failed message expectation" do
-      def run_example(*pending_args)
-        super(*pending_args) { "foo".should_receive(:bar) }
-      end
-
-      it "passes" do
-        run_example("just because").should be_pending
-      end
-    end
-
-    context "that passes" do
-      def run_example(*pending_args)
-        super(*pending_args) { 3.should eq(3) }
-      end
-
-      context "when given no options" do
-        it "fails with a PendingExampleFixedError" do
-          run_example("just because").should fail_with(RSpec::Core::Pending::PendingExampleFixedError)
-          run_example.should                 fail_with(RSpec::Core::Pending::PendingExampleFixedError)
-        end
-      end
-
-      context "when given a truthy :if option" do
-        it "fails with a PendingExampleFixedError" do
-          run_example("just because", :if => true).should fail_with(RSpec::Core::Pending::PendingExampleFixedError)
-          run_example(                :if => true).should fail_with(RSpec::Core::Pending::PendingExampleFixedError)
-        end
-      end
-
-      context "when given a falsey :if option" do
-        it "runs the example and it passes" do
-          run_example(                :if => false).should pass
-          run_example("just because", :if => false).should pass
-        end
-      end
-
-      context "when given a truthy :unless option" do
-        it "runs the example and it passes" do
-          run_example(                :unless => true).should pass
-          run_example("just because", :unless => true).should pass
-        end
-      end
-
-      context "when given a falsey :unless option" do
-        it "fails with a PendingExampleFixedError" do
-          run_example("just because", :unless => false).should fail_with(RSpec::Core::Pending::PendingExampleFixedError)
-          run_example(                :unless => false).should fail_with(RSpec::Core::Pending::PendingExampleFixedError)
-        end
-      end
+      group.run
+      expect(example_to_have_yielded).to eq :did_not_yield
     end
   end
 end

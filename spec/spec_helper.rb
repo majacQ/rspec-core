@@ -1,128 +1,92 @@
-require 'rubygems'
+require 'rspec/support/spec'
 
-begin
-  require 'spork'
-rescue LoadError
-  module Spork
-    def self.prefork
-      yield
-    end
+$rspec_core_without_stderr_monkey_patch = RSpec::Core::Configuration.new
 
-    def self.each_run
-      yield
+class RSpec::Core::Configuration
+  def self.new(*args, &block)
+    super.tap do |config|
+      # We detect ruby warnings via $stderr,
+      # so direct our deprecations to $stdout instead.
+      config.deprecation_stream = $stdout
     end
   end
 end
 
-Spork.prefork do
-  require 'rspec/autorun'
-  require 'autotest/rspec2'
-  require 'aruba/api'
+Dir['./spec/support/**/*.rb'].map do |file|
+  # fake libs aren't intended to be loaded except by some specific specs
+  # that shell out and run a new process.
+  next if file =~ /fake_libs/
 
-  if RUBY_PLATFORM == 'java'
-    # Works around https://jira.codehaus.org/browse/JRUBY-5678
-    require 'fileutils'
-    ENV['TMPDIR'] = File.expand_path('../../tmp', __FILE__)
-    FileUtils.mkdir_p(ENV['TMPDIR'])
+  require file
+end
+
+class RaiseOnFailuresReporter < RSpec::Core::NullReporter
+  def self.example_failed(example)
+    raise example.exception
+  end
+end
+
+module CommonHelpers
+  def describe_successfully(*args, &describe_body)
+    example_group    = RSpec.describe(*args, &describe_body)
+    ran_successfully = example_group.run RaiseOnFailuresReporter
+    expect(ran_successfully).to eq true
+    example_group
   end
 
-  Dir['./spec/support/**/*.rb'].map {|f| require f}
+  def with_env_vars(vars)
+    original = ENV.to_hash
+    vars.each { |k, v| ENV[k] = v }
 
-  class NullObject
-    private
-    def method_missing(method, *args, &block)
-      # ignore
+    begin
+      yield
+    ensure
+      ENV.replace(original)
     end
   end
 
-  def sandboxed(&block)
-    @orig_config = RSpec.configuration
-    @orig_world  = RSpec.world
-    new_config = RSpec::Core::Configuration.new
-    new_world  = RSpec::Core::World.new(new_config)
-    RSpec.instance_variable_set(:@configuration, new_config)
-    RSpec.instance_variable_set(:@world, new_world)
-    object = Object.new
-    object.extend(RSpec::Core::SharedExampleGroup)
+  def without_env_vars(*vars)
+    original = ENV.to_hash
+    vars.each { |k| ENV.delete(k) }
 
-    (class << RSpec::Core::ExampleGroup; self; end).class_eval do
-      alias_method :orig_run, :run
-      def run(reporter=nil)
-        @orig_mock_space = RSpec::Mocks::space
-        RSpec::Mocks::space = RSpec::Mocks::Space.new
-        orig_run(reporter || NullObject.new)
-      ensure
-        RSpec::Mocks::space = @orig_mock_space
-      end
+    begin
+      yield
+    ensure
+      ENV.replace(original)
     end
+  end
 
-    object.instance_eval(&block)
+  def handle_current_dir_change
+    RSpec::Core::Metadata.instance_variable_set(:@relative_path_regex, nil)
+    yield
   ensure
-    (class << RSpec::Core::ExampleGroup; self; end).class_eval do
-      remove_method :run
-      alias_method :run, :orig_run
-      remove_method :orig_run
-    end
-
-    RSpec.instance_variable_set(:@configuration, @orig_config)
-    RSpec.instance_variable_set(:@world, @orig_world)
-  end
-
-  def in_editor?
-    ENV.has_key?('TM_MODE') || ENV.has_key?('EMACS') || ENV.has_key?('VIM')
-  end
-
-  module EnvHelpers
-    def with_env_vars(vars)
-      original = ENV.to_hash
-      vars.each { |k, v| ENV[k] = v }
-
-      begin
-        yield
-      ensure
-        ENV.replace(original)
-      end
-    end
-
-    def without_env_vars(*vars)
-      original = ENV.to_hash
-      vars.each { |k| ENV.delete(k) }
-
-      begin
-        yield
-      ensure
-        ENV.replace(original)
-      end
-    end
-  end
-
-  RSpec.configure do |c|
-    # structural
-    c.alias_it_behaves_like_to 'it_has_behavior'
-    c.around {|example| sandboxed { example.run }}
-    c.include(RSpecHelpers)
-    c.include Aruba::Api, :example_group => {
-      :file_path => /spec\/command_line/
-    }
-
-    # runtime options
-    c.treat_symbols_as_metadata_keys_with_true_values = true
-    c.color = !in_editor?
-    c.filter_run :focus
-    c.include EnvHelpers
-    c.run_all_when_everything_filtered = true
-    c.filter_run_excluding :ruby => lambda {|version|
-      case version.to_s
-      when "!jruby"
-        RUBY_ENGINE == "jruby"
-      when /^> (.*)/
-        !(RUBY_VERSION.to_s > $1)
-      else
-        !(RUBY_VERSION.to_s =~ /^#{version.to_s}/)
-      end
-    }
+    RSpec::Core::Metadata.instance_variable_set(:@relative_path_regex, nil)
   end
 end
 
-Spork.each_run do
+RSpec.configure do |c|
+  c.example_status_persistence_file_path = "./spec/examples.txt"
+  c.around(:example, :isolated_directory) do |ex|
+    handle_current_dir_change(&ex)
+  end
+
+  # structural
+  c.alias_it_behaves_like_to 'it_has_behavior'
+  c.include(RSpecHelpers)
+
+  # runtime options
+  c.raise_errors_for_deprecations!
+  c.include CommonHelpers
+
+  c.expect_with :rspec do |expectations|
+    expectations.max_formatted_output_length = 1000
+  end
+
+  c.mock_with :rspec do |mocks|
+    mocks.verify_partial_doubles = true
+  end
+
+  c.around(:example, :simulate_shell_allowing_unquoted_ids) do |ex|
+    with_env_vars('SHELL' => '/usr/local/bin/bash', &ex)
+  end
 end

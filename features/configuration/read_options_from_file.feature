@@ -1,31 +1,44 @@
 Feature: read command line configuration options from files
 
-  RSpec reads command line configuration options from files in two different
-  locations:
-  
-    Local:  "./.rspec" (i.e. in the project's root directory)
-    Global: "~/.rspec" (i.e. in the user's home directory)
+  RSpec reads command line configuration options from several different files,
+  all conforming to a specific level of specificity. Options from a higher
+  specificity will override conflicting options from lower specificity files.
 
-  Options declared in the local file override those in the global file, while
-  those declared in RSpec.configure will override any ".rspec" file.
+  The locations are:
 
-  Scenario: color set in .rspec
+    * **Global options:** First file from the following list (i.e. the user's
+      personal global options)
+
+      * `$XDG_CONFIG_HOME/rspec/options` ([XDG Base Directory
+        Specification](https://specifications.freedesktop.org/basedir-spec/latest/)
+        config)
+      * `~/.rspec`
+
+    * **Project options:**  `./.rspec` (i.e. in the project's root directory, usually
+      checked into the project)
+
+    * **Local:** `./.rspec-local` (i.e. in the project's root directory, can be
+      gitignored)
+
+  Options specified at the command-line has even higher specificity, as does
+  the `SPEC_OPTS` environment variable. That means that a command-line option
+  would overwrite a project-specific option, which overrides the global value
+  of that option.
+
+  The default options files can all be ignored using the `--options`
+  command-line argument, which selects a custom file to load options from.
+
+  Scenario: Color set in `.rspec`
     Given a file named ".rspec" with:
       """
-      --color
+      --force-color
       """
     And a file named "spec/example_spec.rb" with:
       """ruby
-      describe "color_enabled" do
+      RSpec.describe "color_enabled?" do
         context "when set with RSpec.configure" do
-          before do
-            # color is disabled for non-tty output, so stub the output stream
-            # to say it is tty, even though we're running this with cucumber
-            RSpec.configuration.output_stream.stub(:tty?) { true }
-          end
-
           it "is true" do
-            RSpec.configuration.should be_color_enabled
+            expect(RSpec.configuration).to be_color_enabled
           end
         end
       end
@@ -33,53 +46,54 @@ Feature: read command line configuration options from files
     When I run `rspec ./spec/example_spec.rb`
     Then the examples should all pass
 
-  Scenario: custom options file
+  Scenario: Custom options file
     Given a file named "my.options" with:
       """
       --format documentation
       """
     And a file named "spec/example_spec.rb" with:
       """ruby
-      describe "formatter set in custom options file" do
+      RSpec.describe "formatter set in custom options file" do
         it "sets formatter" do
-          RSpec.configuration.formatters.first.
-            should be_a(RSpec::Core::Formatters::DocumentationFormatter)
+          expect(RSpec.configuration.formatters.first).
+            to be_a(RSpec::Core::Formatters::DocumentationFormatter)
         end
       end
       """
     When I run `rspec spec/example_spec.rb --options my.options`
     Then the examples should all pass
 
-  Scenario: RSpec ignores ./.rspec when custom options file is used
+  Scenario: RSpec ignores `./.rspec` when custom options file is used
     Given a file named "my.options" with:
       """
       --format documentation
       """
     And a file named ".rspec" with:
       """
-      --color
+      --no-color
       """
     And a file named "spec/example_spec.rb" with:
       """ruby
-      describe "custom options file" do
+      RSpec.describe "custom options file" do
         it "causes .rspec to be ignored" do
-          RSpec.configuration.color_enabled.should be_false
+          expect(RSpec.configuration.color_mode).to eq(:automatic)
         end
       end
       """
     When I run `rspec spec/example_spec.rb --options my.options`
     Then the examples should all pass
 
-  Scenario: using ERB in .rspec
+  Scenario: Using ERB in `.rspec`
     Given a file named ".rspec" with:
       """
       --format <%= true ? 'documentation' : 'progress' %>
       """
     And a file named "spec/example_spec.rb" with:
       """ruby
-      describe "formatter" do
+      RSpec.describe "formatter" do
         it "is set to documentation" do
-          RSpec.configuration.formatters.first.should be_an(RSpec::Core::Formatters::DocumentationFormatter)
+          expect(RSpec.configuration.formatters.first).
+            to be_an(RSpec::Core::Formatters::DocumentationFormatter)
         end
       end
       """

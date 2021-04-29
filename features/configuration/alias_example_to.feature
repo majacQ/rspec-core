@@ -1,48 +1,57 @@
-Feature: alias_example_to
+Feature: Create example aliases
 
-  Use `config.alias_example_to` to create new example group methods
-  that define examples with the configured metadata.
+  Use `config.alias_example_to` to create new example group methods that define
+  examples with the configured metadata. You can also specify metadata using
+  only symbols.
 
-  If you set the `treat_symbols_as_metadata_keys_with_true_values` config option
-  to `true`, you can specify metadata using only symbols.
-
-  Scenario: Use alias_example_to to define focused example
+  Scenario: Use `alias_example_to` to define a custom example name
     Given a file named "alias_example_to_spec.rb" with:
       """ruby
       RSpec.configure do |c|
-        c.alias_example_to :fit, :focused => true
-        c.filter_run :focused => true
+        c.alias_example_to :task
       end
 
-      describe "an example group" do
-        it "does one thing" do
-        end
-
-        fit "does another thing" do
+      RSpec.describe "a task example group" do
+        task "does something" do
+          expect(5).to eq(5)
         end
       end
       """
     When I run `rspec alias_example_to_spec.rb --format doc`
-    Then the output should contain "does another thing"
-    And the output should not contain "does one thing"
+    Then the output should contain "does something"
+    And the examples should all pass
 
-  Scenario: use symbols as metadata
+
+  Scenario: Use `alias_example_to` to define a pending example
+    Given a file named "alias_example_to_pending_spec.rb" with:
+      """ruby
+      RSpec.configure do |c|
+        c.alias_example_to :pit, :pending => "Pit alias used"
+      end
+
+      RSpec.describe "an example group" do
+        pit "does something later on" do
+          fail "not implemented yet"
+        end
+      end
+      """
+    When I run `rspec alias_example_to_pending_spec.rb --format doc`
+    Then the output should contain "does something later on (PENDING: Pit alias used)"
+    And the output should contain "0 failures"
+
+  Scenario: Use symbols as metadata
     Given a file named "use_symbols_as_metadata_spec.rb" with:
       """ruby
       RSpec.configure do |c|
-        c.treat_symbols_as_metadata_keys_with_true_values = true
-        c.alias_example_to :fit, :focused
-        c.filter_run :focused
+        c.alias_example_to :pit, :pending
       end
 
-      describe "an example group" do
-        it "does one thing" do
-        end
-
-        fit "does another thing" do
+      RSpec.describe "an example group" do
+        pit "does something later on" do
+          fail "not implemented yet"
         end
       end
       """
     When I run `rspec use_symbols_as_metadata_spec.rb --format doc`
-    Then the output should contain "does another thing"
-    And the output should not contain "does one thing"
+    Then the output should contain "does something later on (PENDING: No reason given)"
+    And the output should contain "0 failures"

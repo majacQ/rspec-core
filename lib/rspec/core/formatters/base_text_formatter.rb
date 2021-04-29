@@ -1,231 +1,73 @@
-require 'rspec/core/formatters/base_formatter'
+RSpec::Support.require_rspec_core "formatters/base_formatter"
 
 module RSpec
   module Core
     module Formatters
-
-      # Base for all of RSpec's built-in formatters. See RSpec::Core::Formatters::BaseFormatter
-      # to learn more about all of the methods called by the reporter.
+      # Base for all of RSpec's built-in formatters. See
+      # RSpec::Core::Formatters::BaseFormatter to learn more about all of the
+      # methods called by the reporter.
       #
       # @see RSpec::Core::Formatters::BaseFormatter
       # @see RSpec::Core::Reporter
       class BaseTextFormatter < BaseFormatter
-        def message(message)
-          output.puts message
-        end
+        Formatters.register self,
+                            :message, :dump_summary, :dump_failures, :dump_pending, :seed
 
-        def dump_failures
-          return if failed_examples.empty?
-          output.puts
-          output.puts "Failures:"
-          failed_examples.each_with_index do |example, index|
-            output.puts
-            pending_fixed?(example) ? dump_pending_fixed(example, index) : dump_failure(example, index)
-            dump_backtrace(example)
-          end
+        # @api public
+        #
+        # Used by the reporter to send messages to the output stream.
+        #
+        # @param notification [MessageNotification] containing message
+        def message(notification)
+          output.puts notification.message
         end
 
         # @api public
         #
-        # Colorizes the output red for failure, yellow for
-        # pending, and green otherwise.
+        # Dumps detailed information about each example failure.
         #
-        # @param [String] string
-        def colorise_summary(summary)
-          if failure_count > 0
-            red(summary)
-          elsif pending_count > 0
-            yellow(summary)
-          else
-            green(summary)
-          end
-        end
-
-        def dump_summary(duration, example_count, failure_count, pending_count)
-          super(duration, example_count, failure_count, pending_count)
-          dump_profile if profile_examples?
-          output.puts "\nFinished in #{format_duration(duration)}\n"
-          output.puts colorise_summary(summary_line(example_count, failure_count, pending_count))
-          dump_commands_to_rerun_failed_examples
+        # @param notification [NullNotification]
+        def dump_failures(notification)
+          return if notification.failure_notifications.empty?
+          output.puts notification.fully_formatted_failed_examples
         end
 
         # @api public
         #
-        # Outputs commands which can be used to re-run failed examples.
+        # This method is invoked after the dumping of examples and failures.
+        # Each parameter is assigned to a corresponding attribute.
         #
-        def dump_commands_to_rerun_failed_examples
-          return if failed_examples.empty?
-          output.puts
-          output.puts("Failed examples:")
-          output.puts
+        # @param summary [SummaryNotification] containing duration,
+        #   example_count, failure_count and pending_count
+        def dump_summary(summary)
+          output.puts summary.fully_formatted
+        end
 
-          failed_examples.each do |example|
-            output.puts(red("rspec #{RSpec::Core::Metadata::relative_path(example.location)}") + " " + cyan("# #{example.full_description}"))
-          end
+        # @private
+        def dump_pending(notification)
+          return if notification.pending_examples.empty?
+          output.puts notification.fully_formatted_pending_examples
+        end
+
+        # @private
+        def seed(notification)
+          return unless notification.seed_used?
+          output.puts notification.fully_formatted
         end
 
         # @api public
         #
-        # Outputs the slowest examples in a report when using `--profile COUNT` (default 10).
+        # Invoked at the end of a suite run. Allows the formatter to do any
+        # tidying up, but be aware that formatter output streams may be used
+        # elsewhere so don't actually close them.
         #
-        def dump_profile
-          number_of_examples = RSpec.configuration.profile_examples
-          sorted_examples = examples.sort_by {|example|
-            example.execution_result[:run_time] }.reverse.first(number_of_examples)
+        # @param _notification [NullNotification] (Ignored)
+        def close(_notification)
+          return if output.closed?
 
-          total, slows = [examples, sorted_examples].map {|exs|
-            exs.inject(0.0) {|i, e| i + e.execution_result[:run_time] }}
-
-          time_taken = slows / total
-          percentage = '%.1f' % ((time_taken.nan? ? 0.0 : time_taken) * 100)
-
-          output.puts "\nTop #{sorted_examples.size} slowest examples (#{format_seconds(slows)} seconds, #{percentage}% of total time):\n"
-
-          sorted_examples.each do |example|
-            output.puts "  #{example.full_description}"
-            output.puts cyan("    #{red(format_seconds(example.execution_result[:run_time]))} #{red("seconds")} #{format_caller(example.location)}")
-          end
-        end
-
-        # @api public
-        #
-        # Outputs summary with number of examples, failures and pending.
-        #
-        def summary_line(example_count, failure_count, pending_count)
-          summary = pluralize(example_count, "example")
-          summary << ", " << pluralize(failure_count, "failure")
-          summary << ", #{pending_count} pending" if pending_count > 0
-          summary
-        end
-
-        def dump_pending
-          unless pending_examples.empty?
-            output.puts
-            output.puts "Pending:"
-            pending_examples.each do |pending_example|
-              output.puts yellow("  #{pending_example.full_description}")
-              output.puts cyan("    # #{pending_example.execution_result[:pending_message]}")
-              output.puts cyan("    # #{format_caller(pending_example.location)}")
-              if pending_example.execution_result[:exception] \
-                && RSpec.configuration.show_failures_in_pending_blocks?
-                dump_failure_info(pending_example)
-                dump_backtrace(pending_example)
-              end
-            end
-          end
-        end
-
-        def seed(number)
           output.puts
-          output.puts "Randomized with seed #{number}"
-          output.puts
-        end
 
-        def close
-          output.close if IO === output && output != $stdout
-        end
-
-      protected
-
-        def color(text, color_code)
-          color_enabled? ? "#{color_code}#{text}\e[0m" : text
-        end
-
-        def bold(text)
-          color(text, "\e[1m")
-        end
-
-        def red(text)
-          color(text, "\e[31m")
-        end
-
-        def green(text)
-          color(text, "\e[32m")
-        end
-
-        def yellow(text)
-          color(text, "\e[33m")
-        end
-
-        def blue(text)
-          color(text, "\e[34m")
-        end
-
-        def magenta(text)
-          color(text, "\e[35m")
-        end
-
-        def cyan(text)
-          color(text, "\e[36m")
-        end
-
-        def white(text)
-          color(text, "\e[37m")
-        end
-
-        def short_padding
-          '  '
-        end
-
-        def long_padding
-          '     '
-        end
-
-      private
-
-        def format_caller(caller_info)
-          backtrace_line(caller_info.to_s.split(':in `block').first)
-        end
-
-        def dump_backtrace(example)
-          format_backtrace(example.execution_result[:exception].backtrace, example).each do |backtrace_info|
-            output.puts cyan("#{long_padding}# #{backtrace_info}")
-          end
-        end
-
-        def dump_pending_fixed(example, index)
-          output.puts "#{short_padding}#{index.next}) #{example.full_description} FIXED"
-          output.puts blue("#{long_padding}Expected pending '#{example.metadata[:execution_result][:pending_message]}' to fail. No Error was raised.")
-        end
-
-        def pending_fixed?(example)
-          example.execution_result[:exception].pending_fixed?
-        end
-
-        def dump_failure(example, index)
-          output.puts "#{short_padding}#{index.next}) #{example.full_description}"
-          dump_failure_info(example)
-        end
-
-        def dump_failure_info(example)
-          exception = example.execution_result[:exception]
-          exception_class_name = exception_class_name_for(exception)
-
-          output.puts "#{long_padding}#{red("Failure/Error:")} #{red(read_failed_line(exception, example).strip)}"
-          output.puts "#{long_padding}#{red(exception_class_name)}:" unless exception_class_name =~ /RSpec/
-          exception.message.to_s.split("\n").each { |line| output.puts "#{long_padding}  #{red(line)}" } if exception.message
-          if shared_group = find_shared_group(example)
-            dump_shared_failure_info(shared_group)
-          end
-        end
-
-        def exception_class_name_for(exception)
-          name = exception.class.name.to_s
-          name ="(anonymous error class)" if name == ''
-          name
-        end
-
-        def dump_shared_failure_info(group)
-          output.puts "#{long_padding}Shared Example Group: \"#{group.metadata[:shared_group_name]}\" called from " +
-            "#{backtrace_line(group.metadata[:example_group][:location])}"
-        end
-
-        def find_shared_group(example)
-          group_and_parent_groups(example).find {|group| group.metadata[:shared_group_name]}
-        end
-
-        def group_and_parent_groups(example)
-          example.example_group.parent_groups + [example.example_group]
+          output.flush
         end
       end
     end
