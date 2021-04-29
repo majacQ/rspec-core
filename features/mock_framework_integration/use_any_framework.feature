@@ -69,7 +69,7 @@ Feature: mock with an alternative framework
           end
 
           def verify_mocks_for_rspec
-            Expector.verify_expectors.each {|d| d.verify}
+            Expector.verify_expectors
           end
 
           def teardown_mocks_for_rspec
@@ -84,10 +84,10 @@ Feature: mock with an alternative framework
       require File.expand_path("../expector", __FILE__)
 
       RSpec.configure do |config|
-        config.mock_framework = Expector::RSpecAdapter
+        config.mock_with Expector::RSpecAdapter
       end
 
-      describe Expector do
+      RSpec.describe Expector do
         it "passes when message is received" do
           expector = Expector.new
           expector.expect(:foo)
