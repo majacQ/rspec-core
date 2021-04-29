@@ -1,63 +1,39 @@
-# encoding: utf-8
-require 'spec_helper'
 require 'rspec/core/formatters/html_formatter'
-require 'nokogiri'
 
 module RSpec
   module Core
     module Formatters
       RSpec.describe HtmlFormatter do
+        include FormatterSupport
 
         let(:root) { File.expand_path("#{File.dirname(__FILE__)}/../../../..") }
+
         let(:expected_file) do
           "#{File.dirname(__FILE__)}/html_formatted.html"
         end
 
-        let(:generated_html) do
-          options = %w[spec/rspec/core/resources/formatter_specs.rb --format html --order defined]
+        let(:actual_html) do
+          run_example_specs_with_formatter('html') do |runner|
+            allow(runner.configuration).to receive(:load_spec_files) do
+              runner.configuration.files_to_run.map { |f| load File.expand_path(f) }
+            end
 
-          err, out = StringIO.new, StringIO.new
-          err.set_encoding("utf-8") if err.respond_to?(:set_encoding)
-
-          command_line = RSpec::Core::CommandLine.new(options)
-          command_line.instance_variable_get("@configuration").backtrace_formatter.inclusion_patterns = []
-          command_line.run(err, out)
-          html = out.string.gsub(/\d+\.\d+(s| seconds)/, "n.nnnn\\1")
-
-          actual_doc = Nokogiri::HTML(html)
-          actual_doc.css("div.backtrace pre").each do |elem|
-            # This is to minimize churn on backtrace lines that we do not
-            # assert on anyway.
-            backtrace = elem.inner_html.lines.
-              select {|e| e =~ /formatter_specs\.rb/ }.
-              map {|x| x.chomp.split(":")[0..1].join(':') }.
-              join("\n")
-
-            elem.inner_html = backtrace
+            # This is to minimize churn on backtrace lines
+            runner.configuration.backtrace_exclusion_patterns << /.*/
+            runner.configuration.backtrace_inclusion_patterns << /formatter_specs\.rb/
           end
-          actual_doc.inner_html
         end
 
         let(:expected_html) do
-          if File.file?(expected_file)
-            File.read(expected_file)
-          else
-            pending "There is no HTML file with expected content for this platform: #{expected_file}"
-          end
-        end
-
-        before do
-          allow(RSpec.configuration).to receive(:load_spec_files) do
-            RSpec.configuration.files_to_run.map {|f| load File.expand_path(f) }
-          end
+          File.read(expected_file)
         end
 
         # Uncomment this group temporarily in order to overwrite the expected
         # with actual.  Use with care!!!
-        describe "file generator", :if => ENV['GENERATE'] do
+        describe "file generator", :skip => !ENV['GENERATE'] do
           it "generates a new comparison file" do
             Dir.chdir(root) do
-              File.open(expected_file, 'w') {|io| io.write(generated_html)}
+              File.open(expected_file, 'w') {|io| io.write(actual_html)}
             end
           end
         end
@@ -69,51 +45,20 @@ module RSpec
             select  {|e| e =~ /formatter_specs\.rb/}
         end
 
-        describe 'produced HTML', :if => RUBY_VERSION <= '2.0.0' do
+        describe 'produced HTML' do
           # Rubies before 2 are a wild west of different outputs, and it's not
           # worth the effort to maintain accurate fixtures for all of them.
           # Since we are verifying fixtures on other rubies, if this code at
           # least runs we can be reasonably confident the output is right since
           # behaviour variances that we care about across versions is neglible.
           it 'is present' do
-            expect(generated_html).to be
+            expect(actual_html).to be
           end
         end
 
-        describe 'produced HTML', :slow, :if => RUBY_VERSION >= '2.0.0' do
-          def build_and_verify_formatter_output
-            Dir.chdir(root) do
-              actual_doc = Nokogiri::HTML(generated_html)
-              actual_backtraces = extract_backtrace_from(actual_doc)
-              actual_doc.css("div.backtrace").remove
-
-              expected_doc = Nokogiri::HTML(expected_html)
-              expected_backtraces = extract_backtrace_from(expected_doc)
-              expected_doc.search("div.backtrace").remove
-
-              expect(actual_doc.inner_html).to eq(expected_doc.inner_html)
-
-              expected_backtraces.each_with_index do |expected_line, i|
-                expected_path, expected_line_number, expected_suffix = expected_line.split(':')
-                actual_path, actual_line_number, actual_suffix = actual_backtraces[i].split(':')
-
-                expect(File.expand_path(actual_path)).to eq(File.expand_path(expected_path))
-                expect(actual_line_number).to eq(expected_line_number)
-                expect(actual_suffix).to eq(expected_suffix)
-              end
-            end
-          end
-
-          it "is identical to the one we designed manually" do
-            build_and_verify_formatter_output
-          end
-
-          context 'with mathn loaded' do
-            include MathnIntegrationSupport
-
-            it "is identical to the one we designed manually", :slow do
-              with_mathn_loaded { build_and_verify_formatter_output }
-            end
+        describe 'produced HTML', :slow do
+          it "is identical to the one we designed manually", :pending => RSpec::Support::Ruby.jruby? do
+            expect(actual_html).to eq(expected_html)
           end
         end
       end

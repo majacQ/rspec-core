@@ -1,4 +1,3 @@
-require 'spec_helper'
 require 'rspec/core/reporter'
 require 'rspec/core/formatters/deprecation_formatter'
 require 'tempfile'
@@ -26,6 +25,23 @@ module RSpec::Core::Formatters
           send_notification :deprecation, notification(:message => "this message", :deprecated => "x", :replacement => "y", :call_site => "z")
           deprecation_stream.rewind
           expect(deprecation_stream.read).to eq "this message\n"
+        end
+
+        it "surrounds multiline messages in fenceposts" do
+          multiline_message = <<-EOS.gsub(/^\s+\|/, '')
+            |line one
+            |line two
+          EOS
+          send_notification :deprecation, notification(:message => multiline_message)
+          deprecation_stream.rewind
+
+          expected = <<-EOS.gsub(/^\s+\|/, '')
+            |--------------------------------------------------------------------------------
+            |line one
+            |line two
+            |--------------------------------------------------------------------------------
+          EOS
+          expect(deprecation_stream.read).to eq expected
         end
 
         it "includes the method" do
@@ -94,6 +110,12 @@ module RSpec::Core::Formatters
           expect(summary_stream.string).to match(/1 deprecation/)
           expect(File.read(deprecation_stream.path)).to eq("foo is deprecated.\n#{DeprecationFormatter::RAISE_ERROR_CONFIG_NOTICE}")
         end
+
+        it "can handle when the stream is reopened to a system stream", :skip => RSpec::Support::OS.windows? do
+          send_notification :deprecation, notification(:deprecated => 'foo')
+          deprecation_stream.reopen(IO.for_fd(IO.sysopen('/dev/null', "w+")))
+          send_notification :deprecation_summary, null_notification
+        end
       end
 
       context "with an Error deprecation_stream" do
@@ -149,7 +171,7 @@ module RSpec::Core::Formatters
             |i_am_deprecated is deprecated. Called from foo.rb:1.
             |i_am_deprecated is deprecated. Called from foo.rb:2.
             |i_am_deprecated is deprecated. Called from foo.rb:3.
-            |Too many uses of deprecated 'i_am_deprecated'. Set config.deprecation_stream to a File for full output.
+            |Too many uses of deprecated 'i_am_deprecated'. #{DeprecationFormatter::DEPRECATION_STREAM_NOTICE}
             |
             |#{DeprecationFormatter::RAISE_ERROR_CONFIG_NOTICE}
           EOS
@@ -169,7 +191,7 @@ module RSpec::Core::Formatters
             |This is a long string with some callsite info: /path/0/to/some/file.rb:203.  And some more stuff can come after.
             |This is a long string with some callsite info: /path/1/to/some/file.rb:213.  And some more stuff can come after.
             |This is a long string with some callsite info: /path/2/to/some/file.rb:223.  And some more stuff can come after.
-            |Too many similar deprecation messages reported, disregarding further reports. Set config.deprecation_stream to a File for full output.
+            |Too many similar deprecation messages reported, disregarding further reports. #{DeprecationFormatter::DEPRECATION_STREAM_NOTICE}
             |
             |#{DeprecationFormatter::RAISE_ERROR_CONFIG_NOTICE}
           EOS

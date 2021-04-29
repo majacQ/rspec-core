@@ -4,12 +4,15 @@ RSpec.configuration.backtrace_exclusion_patterns.push(RR::Errors::BACKTRACE_IDEN
 
 module RSpec
   module Core
+    # @private
     module MockingAdapters
-      # @api private
+      # @private
       module RR
-        def self.framework_name; :rr end
+        def self.framework_name
+          :rr
+        end
 
-        include ::RR::Extensions::InstanceMethods
+        include ::RR::DSL
 
         def setup_mocks_for_rspec
           ::RR::Space.instance.reset

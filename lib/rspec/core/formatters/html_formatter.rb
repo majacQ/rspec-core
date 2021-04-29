@@ -1,16 +1,18 @@
-require 'rspec/core/formatters/base_text_formatter'
-require 'rspec/core/formatters/html_printer'
+RSpec::Support.require_rspec_core "formatters/base_text_formatter"
+RSpec::Support.require_rspec_core "formatters/html_printer"
 
 module RSpec
   module Core
     module Formatters
+      # @private
       class HtmlFormatter < BaseFormatter
         Formatters.register self, :start, :example_group_started, :start_dump,
-                                  :example_started, :example_passed, :example_failed,
-                                  :example_pending, :dump_summary
+                            :example_started, :example_passed, :example_failed,
+                            :example_pending, :dump_summary
 
         def initialize(output)
           super(output)
+          @failed_examples = []
           @example_group_number = 0
           @example_number = 0
           @header_red = nil
@@ -28,31 +30,30 @@ module RSpec
           @example_group_red = false
           @example_group_number += 1
 
-          unless example_group_number == 1
-            @printer.print_example_group_end
-          end
-          @printer.print_example_group_start( example_group_number, notification.group.description, notification.group.parent_groups.size )
+          @printer.print_example_group_end unless example_group_number == 1
+          @printer.print_example_group_start(example_group_number,
+                                             notification.group.description,
+                                             notification.group.parent_groups.size)
           @printer.flush
         end
 
-        def start_dump(notification)
+        def start_dump(_notification)
           @printer.print_example_group_end
           @printer.flush
         end
 
-        def example_started(notification)
+        def example_started(_notification)
           @example_number += 1
         end
 
         def example_passed(passed)
           @printer.move_progress(percent_done)
-          @printer.print_example_passed( passed.example.description, passed.example.execution_result[:run_time] )
+          @printer.print_example_passed(passed.example.description, passed.example.execution_result.run_time)
           @printer.flush
         end
 
-        def example_failed(failed)
-          super
-
+        def example_failed(failure)
+          @failed_examples << failure.example
           unless @header_red
             @header_red = true
             @printer.make_header_red
@@ -65,27 +66,26 @@ module RSpec
 
           @printer.move_progress(percent_done)
 
-          example = failed.example
+          example = failure.example
 
-          exception = example.metadata[:execution_result][:exception]
+          exception = failure.exception
+          message_lines = failure.fully_formatted_lines(nil, RSpec::Core::Notifications::NullColorizer)
           exception_details = if exception
-            {
-              :message => exception.message,
-              :backtrace => format_backtrace(exception.backtrace, example).join("\n")
-            }
-          else
-            false
-          end
-          extra = extra_failure_content(exception)
+                                {
+                                  # drop 2 removes the description (regardless of newlines) and leading blank line
+                                  :message => message_lines.drop(2).join("\n"),
+                                  :backtrace => failure.formatted_backtrace.join("\n"),
+                                }
+                              end
+          extra = extra_failure_content(failure)
 
           @printer.print_example_failed(
-            example.execution_result[:pending_fixed],
+            example.execution_result.pending_fixed,
             example.description,
-            example.execution_result[:run_time],
+            example.execution_result.run_time,
             @failed_examples.size,
             exception_details,
-            (extra == "") ? false : extra,
-            true
+            (extra == "") ? false : extra
           )
           @printer.flush
         end
@@ -96,7 +96,7 @@ module RSpec
           @printer.make_header_yellow unless @header_red
           @printer.make_example_group_header_yellow(example_group_number) unless @example_group_red
           @printer.move_progress(percent_done)
-          @printer.print_example_pending( example.description, example.metadata[:execution_result][:pending_message] )
+          @printer.print_example_pending(example.description, example.execution_result.pending_message)
           @printer.flush
         end
 
@@ -112,15 +112,20 @@ module RSpec
 
       private
 
-        # The number of the currently running example_group
+        # If these methods are declared with attr_reader Ruby will issue a
+        # warning because they are private.
+        # rubocop:disable Style/TrivialAccessors
+
+        # The number of the currently running example_group.
         def example_group_number
           @example_group_number
         end
 
-        # The number of the currently running example (a global counter)
+        # The number of the currently running example (a global counter).
         def example_number
           @example_number
         end
+        # rubocop:enable Style/TrivialAccessors
 
         def percent_done
           result = 100.0
@@ -130,17 +135,18 @@ module RSpec
           result
         end
 
-        # Override this method if you wish to output extra HTML for a failed spec. For example, you
-        # could output links to images or other files produced during the specs.
-        #
-        def extra_failure_content(exception)
-          require 'rspec/core/formatters/snippet_extractor'
-          backtrace = exception.backtrace.map {|line| configuration.backtrace_formatter.backtrace_line(line)}
+        # Override this method if you wish to output extra HTML for a failed
+        # spec. For example, you could output links to images or other files
+        # produced during the specs.
+        def extra_failure_content(failure)
+          RSpec::Support.require_rspec_core "formatters/html_snippet_extractor"
+          backtrace = (failure.exception.backtrace || []).map do |line|
+            RSpec.configuration.backtrace_formatter.backtrace_line(line)
+          end
           backtrace.compact!
-          @snippet_extractor ||= SnippetExtractor.new
+          @snippet_extractor ||= HtmlSnippetExtractor.new
           "    <pre class=\"ruby\"><code>#{@snippet_extractor.snippet(backtrace)}</code></pre>"
         end
-
       end
     end
   end

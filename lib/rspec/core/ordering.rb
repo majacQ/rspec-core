@@ -1,12 +1,5 @@
 module RSpec
   module Core
-    if defined?(::Random)
-      RandomNumberGenerator = ::Random
-    else
-      require 'rspec/core/backport_random'
-      RandomNumberGenerator = RSpec::Core::Backports::Random
-    end
-
     # @private
     module Ordering
       # @private
@@ -31,25 +24,45 @@ module RSpec
 
         def order(items)
           @used = true
-          rng = RandomNumberGenerator.new(@configuration.seed)
-          shuffle items, rng
+
+          seed = @configuration.seed.to_s
+          items.sort_by { |item| jenkins_hash_digest(seed + item.id) }
         end
 
-        if RUBY_VERSION > '1.9.3'
-          def shuffle(list, rng)
-            list.shuffle(:random => rng)
-          end
-        else
-          def shuffle(list, rng)
-            shuffled = list.dup
-            shuffled.size.times do |i|
-              j = i + rng.rand(shuffled.size - i)
-              next if i == j
-              shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-            end
+      private
 
-            shuffled
+        # http://en.wikipedia.org/wiki/Jenkins_hash_function
+        # Jenkins provides a good distribution and is simpler than MD5.
+        # It's a bit slower than MD5 (primarily because `Digest::MD5` is
+        # implemented in C) but has the advantage of not requiring us
+        # to load another part of stdlib, which we try to minimize.
+        def jenkins_hash_digest(string)
+          hash = 0
+
+          string.each_byte do |byte|
+            hash += byte
+            hash &= MAX_32_BIT
+            hash += ((hash << 10) & MAX_32_BIT)
+            hash &= MAX_32_BIT
+            hash ^= hash >> 6
           end
+
+          hash += ((hash << 3) & MAX_32_BIT)
+          hash &= MAX_32_BIT
+          hash ^= hash >> 11
+          hash += ((hash << 15) & MAX_32_BIT)
+          hash &= MAX_32_BIT
+          hash
+        end
+
+        MAX_32_BIT = 4_294_967_295
+      end
+
+      # @private
+      # Orders items by modification time (most recent modified first).
+      class RecentlyModified
+        def order(list)
+          list.sort_by { |item| -File.mtime(item.metadata[:absolute_file_path]).to_i }
         end
       end
 
@@ -72,7 +85,8 @@ module RSpec
           @configuration = configuration
           @strategies    = {}
 
-          register(:random,  Random.new(configuration))
+          register(:random, Random.new(configuration))
+          register(:recently_modified, RecentlyModified.new)
 
           identity = Identity.new
           register(:defined, identity)
@@ -121,29 +135,31 @@ module RSpec
 
         def order=(type)
           order, seed = type.to_s.split(':')
-          @seed = seed = seed.to_i if seed
+          @seed = seed.to_i if seed
 
           ordering_name = if order.include?('rand')
-            :random
-          elsif order == 'defined'
-            :defined
-          end
+                            :random
+                          elsif order == 'defined'
+                            :defined
+                          elsif order == 'recently-modified'
+                            :recently_modified
+                          end
 
           register_ordering(:global, ordering_registry.fetch(ordering_name)) if ordering_name
         end
 
         def force(hash)
-          if hash.has_key?(:seed)
+          if hash.key?(:seed)
             self.seed = hash[:seed]
             @seed_forced  = true
             @order_forced = true
-          elsif hash.has_key?(:order)
+          elsif hash.key?(:order)
             self.order = hash[:order]
             @order_forced = true
           end
         end
 
-        def register_ordering(name, strategy = Custom.new(Proc.new { |l| yield l }))
+        def register_ordering(name, strategy=Custom.new(Proc.new { |l| yield l }))
           return if @order_forced && name == :global
           ordering_registry.register(name, strategy)
         end
@@ -151,4 +167,3 @@ module RSpec
     end
   end
 end
-

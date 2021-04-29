@@ -1,14 +1,14 @@
-require 'spec_helper'
+require 'thread_order'
 
 module RSpec::Core
   RSpec.describe MemoizedHelpers do
     before(:each) { RSpec.configuration.configure_expectation_framework }
 
     def subject_value_for(describe_arg, &block)
-      group = ExampleGroup.describe(describe_arg, &block)
+      example_group = RSpec.describe(describe_arg, &block)
       subject_value = nil
-      group.example { subject_value = subject }
-      group.run
+      example_group.example { subject_value = subject }
+      example_group.run
       subject_value
     end
 
@@ -37,10 +37,40 @@ module RSpec::Core
         end
       end
 
+      describe "with a hash" do
+        it "returns the hash" do
+          expect(subject_value_for(:foo => 3)).to eq(:foo => 3)
+        end
+      end
+
+      describe "with a symbol" do
+        it "returns the symbol" do
+          expect(subject_value_for(:foo)).to eq(:foo)
+        end
+      end
+
+      describe "with true" do
+        it "returns `true`" do
+          expect(subject_value_for(true)).to eq(true)
+        end
+      end
+
+      describe "with false" do
+        it "returns `false`" do
+          expect(subject_value_for(false)).to eq(false)
+        end
+      end
+
+      describe "with nil" do
+        it "returns `nil`" do
+          expect(subject_value_for(nil)).to eq(nil)
+        end
+      end
+
       it "can be overriden and super'd to from a nested group" do
         outer_subject_value = inner_subject_value = nil
 
-        ExampleGroup.describe(Array) do
+        RSpec.describe(Array) do
           subject { super() << :parent_group }
           example { outer_subject_value = subject }
 
@@ -60,29 +90,37 @@ module RSpec::Core
         example_yielded_to_subject = nil
         example_yielded_to_example = nil
 
-        group = ExampleGroup.describe
-        group.subject { |e| example_yielded_to_subject = e }
-        group.example { |e| subject; example_yielded_to_example = e }
-        group.run
+        example_group = RSpec.describe
+        example_group.subject { |e| example_yielded_to_subject = e }
+        example_group.example { |e| subject; example_yielded_to_example = e }
+        example_group.run
 
         expect(example_yielded_to_subject).to eq example_yielded_to_example
+      end
+
+      context "doesn't issue a deprecation when used with doubles" do
+        subject do
+          Struct.new(:value) do
+            def working_with?(double)
+              double.value >= value
+            end
+          end.new 1
+        end
+
+        it { is_expected.to be_working_with double(:value => 10) }
       end
 
       [false, nil].each do |falsy_value|
         context "with a value of #{falsy_value.inspect}" do
           it "is evaluated once per example" do
-            group = ExampleGroup.describe(Array)
-            group.before do
-              expect(Object).to receive(:this_question?).once.and_return(falsy_value)
+            subject_calls = 0
+
+            describe_successfully do
+              subject { subject_calls += 1; falsy_value }
+              example { subject; subject }
             end
-            group.subject do
-              Object.this_question?
-            end
-            group.example do
-              subject
-              subject
-            end
-            expect(group.run).to be_truthy, "expected subject block to be evaluated only once"
+
+            expect(subject_calls).to eq(1)
           end
         end
       end
@@ -98,7 +136,7 @@ module RSpec::Core
 
       describe "defined in a top level group" do
         let(:group) do
-          ExampleGroup.describe do
+          RSpec.describe do
             subject{ [4, 5, 6] }
           end
         end
@@ -138,14 +176,14 @@ module RSpec::Core
             result = nil
             line   = nil
 
-            ExampleGroup.describe do
+            RSpec.describe do
               subject { nil }
               send(hook, :all) { result = (subject rescue $!) }; line = __LINE__
               example { }
             end.run
 
             expect(result).to be_an(Exception)
-            expect(result.message).to match(/subject accessed.*#{hook}\(:all\).*#{__FILE__}:#{line}/m)
+            expect(result.message).to match(/subject accessed.*#{hook}\(:context\).*#{__FILE__}:#{line}/m)
           end
         end
       end
@@ -155,7 +193,7 @@ module RSpec::Core
           example_yielded_to_subject = nil
           example_yielded_to_example = nil
 
-          group = ExampleGroup.describe
+          group = RSpec.describe
           group.subject(:foo) { |e| example_yielded_to_subject = e }
           group.example       { |e| foo; example_yielded_to_example = e }
           group.run
@@ -166,7 +204,7 @@ module RSpec::Core
         it "defines a method that returns the memoized subject" do
           list_value_1 = list_value_2 = subject_value_1 = subject_value_2 = nil
 
-          ExampleGroup.describe do
+          RSpec.describe do
             subject(:list) { [1, 2, 3] }
             example do
               list_value_1 = list
@@ -186,7 +224,7 @@ module RSpec::Core
         it "is referred from inside subject by the name" do
           inner_subject_value = nil
 
-          ExampleGroup.describe do
+          RSpec.describe do
             subject(:list) { [1, 2, 3] }
             describe 'first' do
               subject(:first_element) { list.first }
@@ -200,7 +238,7 @@ module RSpec::Core
         it 'can continue to be referenced by the name even when an inner group redefines the subject' do
           named_value = nil
 
-          ExampleGroup.describe do
+          RSpec.describe do
             subject(:named) { :outer }
 
             describe "inner" do
@@ -218,7 +256,7 @@ module RSpec::Core
         it 'can continue to reference an inner subject after the outer subject name is referenced' do
           subject_value = nil
 
-          ExampleGroup.describe do
+          RSpec.describe do
             subject(:named) { :outer }
 
             describe "inner" do
@@ -236,7 +274,7 @@ module RSpec::Core
         it 'is not overriden when an inner group defines a new method with the same name' do
           subject_value = nil
 
-          ExampleGroup.describe do
+          RSpec.describe do
             subject(:named) { :outer_subject }
 
             describe "inner" do
@@ -252,20 +290,20 @@ module RSpec::Core
           def should_raise_not_supported_error(&block)
             ex = nil
 
-            ExampleGroup.describe do
+            RSpec.describe do
               let(:list) { ["a", "b", "c"] }
               subject { [1, 2, 3] }
 
               describe 'first' do
-                module_eval(&block) if block
+                module_exec(&block) if block
 
                 subject(:list) { super().first(2) }
                 ex = example { subject }
               end
             end.run
 
-            expect(ex.execution_result[:status]).to eq("failed")
-            expect(ex.execution_result[:exception].message).to match(/super.*not supported/)
+            expect(ex.execution_result.status).to eq(:failed)
+            expect(ex.execution_result.exception.message).to match(/super.*not supported/)
           end
 
           it 'raises a "not supported" error' do
@@ -288,21 +326,21 @@ module RSpec::Core
 
     context "using 'self' as an explicit subject" do
       it "delegates matcher to the ExampleGroup" do
-        group = ExampleGroup.describe("group") do
+        group = RSpec.describe("group") do
           subject { self }
           def ok?; true; end
           def not_ok?; false; end
 
-          it { should eq(self) }
-          it { should be_ok }
-          it { should_not be_not_ok }
+          it { is_expected.to eq(self) }
+          it { is_expected.to be_ok }
+          it { is_expected.not_to be_not_ok }
         end
 
         expect(group.run).to be true
       end
 
       it 'supports a new expect-based syntax' do
-        group = ExampleGroup.describe([1, 2, 3]) do
+        group = RSpec.describe([1, 2, 3]) do
           it { is_expected.to be_an Array }
           it { is_expected.not_to include 4 }
         end
@@ -321,6 +359,107 @@ module RSpec::Core
 
       it "returns memoized value from first invocation" do
         expect(subject).to eq(3)
+      end
+    end
+
+    describe 'threadsafety', :threadsafe => true do
+      before(:all) { eq 1 } # explanation: https://github.com/rspec/rspec-core/pull/1858/files#r25411166
+
+      context 'when not threadsafe' do
+        # would be nice to not set this on the global
+        before { RSpec.configuration.threadsafe = false }
+
+        it 'can wind up overwriting the previous memoized value (but if you don\'t need threadsafety, this is faster)' do
+          describe_successfully do
+            let!(:order) { ThreadOrder.new }
+            after { order.apocalypse! :join }
+
+            let :memoized_value do
+              if order.current == :second
+                :second_access
+              else
+                order.pass_to :second, :resume_on => :exit
+                :first_access
+              end
+            end
+
+            example do
+              order.declare(:second) { expect(memoized_value).to eq :second_access }
+              expect(memoized_value).to eq :first_access
+            end
+          end
+        end
+      end
+
+      context 'when threadsafe' do
+        before(:context) { RSpec.configuration.threadsafe = true }
+        specify 'first thread to access determines the return value' do
+          describe_successfully do
+            let!(:order) { ThreadOrder.new }
+            after { order.apocalypse! :join }
+
+            let :memoized_value do
+              if order.current == :second
+                :second_access
+              else
+                order.pass_to :second, :resume_on => :sleep
+                :first_access
+              end
+            end
+
+            example do
+              order.declare(:second) { expect(memoized_value).to eq :first_access }
+              expect(memoized_value).to eq :first_access
+            end
+          end
+        end
+
+        specify 'memoized block will only be evaluated once' do
+          describe_successfully do
+            let!(:order) { ThreadOrder.new }
+            after  { order.apocalypse! }
+            before { @previously_accessed = false }
+
+            let :memoized_value do
+              raise 'Called multiple times!' if @previously_accessed
+              @previously_accessed = true
+              order.pass_to :second, :resume_on => :sleep
+            end
+
+            example do
+              order.declare(:second) { memoized_value }
+              memoized_value
+              order.join_all
+            end
+          end
+        end
+
+        specify 'memoized blocks prevent other threads from accessing, even when it is accesssed in a superclass' do
+          describe_successfully do
+            let!(:order) { ThreadOrder.new }
+            after { order.apocalypse! :join }
+
+            let!(:calls) { {:parent => 0, :child => 0} }
+            let(:memoized_value) do
+              calls[:parent] += 1
+              order.pass_to :second, :resume_on => :sleep
+              'parent'
+            end
+
+            describe 'child' do
+              let :memoized_value do
+                calls[:child] += 1
+                "#{super()}/child"
+              end
+
+              example do
+                order.declare(:second) { expect(memoized_value).to eq 'parent/child' }
+                expect(memoized_value).to eq 'parent/child'
+                expect(calls).to eq :parent => 1, :child => 1
+              end
+            end
+          end
+        end
       end
     end
   end
@@ -377,8 +516,32 @@ module RSpec::Core
 
     it 'raises a useful error when called without a block' do
       expect do
-        ExampleGroup.describe { let(:list) }
+        RSpec.describe { let(:list) }
       end.to raise_error(/#let or #subject called without a block/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #initialize' do
+      expect do
+        RSpec.describe { let(:initialize) { true } }
+      end.to raise_error(/#let or #subject called with reserved name `initialize`/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #initialize as a string' do
+      expect do
+        RSpec.describe { let('initialize') { true } }
+      end.to raise_error(/#let or #subject called with reserved name `initialize`/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #to_s' do
+      expect do
+        RSpec.describe { let(:to_s) { true } }
+      end.to raise_error(/#let or #subject called with reserved name `to_s`/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #to_s as a string' do
+      expect do
+        RSpec.describe { let('to_s') { true } }
+      end.to raise_error(/#let or #subject called with reserved name `to_s`/)
     end
 
     let(:a_value) { "a string" }
@@ -413,20 +576,20 @@ module RSpec::Core
         result = nil
         line   = nil
 
-        ExampleGroup.describe do
+        RSpec.describe do
           let(:foo) { nil }
           send(hook, :all) { result = (foo rescue $!) }; line = __LINE__
           example { }
         end.run
 
         expect(result).to be_an(Exception)
-        expect(result.message).to match(/let declaration `foo` accessed.*#{hook}\(:all\).*#{__FILE__}:#{line}/m)
+        expect(result.message).to match(/let declaration `foo` accessed.*#{hook}\(:context\).*#{__FILE__}:#{line}/m)
       end
     end
 
     context "when included modules have hooks that define memoized helpers" do
       it "allows memoized helpers to override methods in previously included modules" do
-        group = ExampleGroup.describe do
+        group = RSpec.describe do
           include Module.new {
             def self.included(m); m.let(:unrelated) { :unrelated }; end
           }
@@ -470,26 +633,25 @@ module RSpec::Core
 
     describe Object do
       context 'with implicit subject' do
-        it_should_behave_like 'a subject'
+        it_behaves_like 'a subject'
       end
 
       context 'with explicit subject' do
         subject { Object.new }
-        it_should_behave_like 'a subject'
+        it_behaves_like 'a subject'
       end
 
       context 'with a constant subject'do
         subject { 123 }
-        it_should_behave_like 'a subject'
+        it_behaves_like 'a subject'
       end
     end
   end
 
   RSpec.describe 'Module#define_method' do
-    it 'is still a private method' do
+    it 'retains its normal private visibility on Ruby versions where it is normally private', :skip => RUBY_VERSION >= '2.5' do
       a_module = Module.new
       expect { a_module.define_method(:name) { "implementation" } }.to raise_error NoMethodError
     end
   end
 end
-

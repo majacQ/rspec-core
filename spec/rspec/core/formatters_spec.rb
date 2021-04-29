@@ -1,13 +1,14 @@
-require 'spec_helper'
+require 'pathname'
 
 module RSpec::Core::Formatters
-  describe Loader do
+  RSpec.describe Loader do
+
+    let(:output)   { StringIO.new }
+    let(:reporter) { instance_double "Reporter", :register_listener => nil }
+    let(:loader)   { Loader.new reporter }
 
     describe "#add(formatter)" do
-      let(:loader) { Loader.new reporter }
-      let(:output)     { StringIO.new }
-      let(:path)       { File.join(Dir.tmpdir, 'output.txt') }
-      let(:reporter)   { double "reporter", :register_listener => nil }
+      let(:path) { File.join(Dir.tmpdir, 'output.txt') }
 
       it "adds to the list of formatters" do
         loader.add :documentation, output
@@ -38,32 +39,53 @@ module RSpec::Core::Formatters
         expect(loader.formatters.first).to be_an_instance_of(CustomFormatter)
       end
 
-      it "handles formatters that dont implement notifications" do
-        formatter_class = Struct.new(:output)
-        loader.add formatter_class, output
-        expect(loader.formatters.first).to be_an_instance_of(RSpec::Core::Formatters::LegacyFormatter)
+      it "lets you pass a formatter instance, for when you need to instantiate it with some custom state" do
+        instance = ProgressFormatter.new(StringIO.new)
+
+        expect {
+          loader.add(instance)
+        }.to change { loader.formatters }.from([]).to([instance])
       end
 
-      context "when a legacy formatter is added" do
+      context "when a legacy formatter is added with RSpec::LegacyFormatters" do
         formatter_class = Struct.new(:output)
+        let(:formatter) { double "formatter", :notifications => notifications, :output => output }
+        let(:notifications) { [:a, :b, :c] }
 
-        it "issues a deprecation" do
-          expect_warn_deprecation_with_call_site(__FILE__, __LINE__ + 2,
-            /The #{formatter_class} formatter uses the deprecated formatter interface/)
+        before do
+          class_double("RSpec::LegacyFormatters", :load_formatter => formatter).as_stubbed_const
+        end
+
+        it "loads formatters from the external gem" do
+          loader.add formatter_class, output
+          expect(loader.formatters).to eq [formatter]
+        end
+
+        it "subscribes the formatter to the notifications the adaptor implements" do
+          expect(reporter).to receive(:register_listener).with(formatter, *notifications)
           loader.add formatter_class, output
         end
 
-        it "does not mistakenly add in the progress formatter" do
-          # When we issue a deprecation warning it triggers `setup_defaults`,
-          # which adds the progress formatter if it thinks no formatter has been
-          # added yet.
-          allow(RSpec).to receive(:warn_deprecation) do
-            loader.setup_default(StringIO.new, StringIO.new)
-          end
-
+        it "will ignore duplicate legacy formatters" do
           loader.add formatter_class, output
+          expect(reporter).to_not receive(:register_listener)
+          expect {
+            loader.add formatter_class, output
+          }.not_to change { loader.formatters.length }
+        end
+      end
 
-          expect(loader.formatters.grep(RSpec::Core::Formatters::ProgressFormatter)).to eq([])
+      context "when a legacy formatter is added without RSpec::LegacyFormatters" do
+        formatter_class = Struct.new(:output)
+
+        before do
+          allow_deprecation
+        end
+
+        it "issues a deprecation" do
+          expect {
+            loader.add formatter_class, output
+          }.to raise_error(ArgumentError, /The #{formatter_class} formatter uses the deprecated formatter interface not supported directly by RSpec 4/)
         end
       end
 
@@ -98,12 +120,20 @@ module RSpec::Core::Formatters
           expect(loader.formatters.first.output).to be_a(File)
           expect(loader.formatters.first.output.path).to eq(path)
         end
+
+        it "accepts Pathname objects for file paths" do
+          pathname = Pathname.new(path)
+          loader.add('doc', pathname)
+          expect(loader.formatters.first.output).to be_a(File)
+          expect(loader.formatters.first.output.path).to eq(path)
+        end
       end
 
       context "when a duplicate formatter exists" do
         before { loader.add :documentation, output }
 
         it "doesn't add the formatter for the same output target" do
+          expect(reporter).to_not receive(:register_listener)
           expect {
             loader.add :documentation, output
           }.not_to change { loader.formatters.length }
@@ -113,6 +143,72 @@ module RSpec::Core::Formatters
           expect {
             loader.add :documentation, path
           }.to change { loader.formatters.length }
+        end
+      end
+
+      context "When a custom formatter exists" do
+        specific_formatter = RSpec::Core::Formatters::JsonFormatter
+        generic_formatter = specific_formatter.superclass
+
+        before { loader.add generic_formatter, output }
+
+        it "adds a subclass of that formatter for the same output target" do
+          expect {
+            loader.add specific_formatter, output
+          }.to change { loader.formatters.length }
+        end
+      end
+    end
+
+    describe "#setup_default" do
+      let(:setup_default) { loader.setup_default output, output }
+
+      context "with a formatter that implements #message" do
+        it 'doesnt add a fallback formatter' do
+          allow(reporter).to receive(:registered_listeners).with(:message) { [:json] }
+          setup_default
+          expect(loader.formatters).to exclude(
+            an_instance_of ::RSpec::Core::Formatters::FallbackMessageFormatter
+          )
+        end
+      end
+
+      context "without a formatter that implements #message" do
+        it 'adds a fallback for message output' do
+          allow(reporter).to receive(:registered_listeners).with(:message) { [] }
+          expect {
+            setup_default
+          }.to change { loader.formatters }.
+            from( excluding an_instance_of ::RSpec::Core::Formatters::FallbackMessageFormatter ).
+            to( including an_instance_of ::RSpec::Core::Formatters::FallbackMessageFormatter )
+        end
+      end
+
+      context "with profiling enabled" do
+        before do
+          allow(reporter).to receive(:registered_listeners).with(:message) { [:json] }
+          allow(RSpec.configuration).to receive(:profile_examples?) { true }
+        end
+
+        context "without an existing profile formatter" do
+          it "will add the profile formatter" do
+            allow(reporter).to receive(:registered_listeners).with(:dump_profile) { [] }
+            expect {
+              setup_default
+            }.to change { loader.formatters }.
+              from( excluding an_instance_of ::RSpec::Core::Formatters::ProfileFormatter ).
+              to( including an_instance_of ::RSpec::Core::Formatters::ProfileFormatter )
+          end
+        end
+
+        context "when a formatter that implement #dump_profile is added" do
+          it "wont add the profile formatter" do
+            allow(reporter).to receive(:registered_listeners).with(:dump_profile) { [:json] }
+            setup_default
+            expect(
+              loader.formatters.map(&:class)
+            ).to_not include ::RSpec::Core::Formatters::ProfileFormatter
+          end
         end
       end
     end

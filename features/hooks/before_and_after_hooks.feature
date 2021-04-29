@@ -1,32 +1,45 @@
-Feature: before and after hooks
+Feature: `before` and `after` hooks
 
-  Use `before` and `after` hooks to execute arbitrary code before and/or
-  after the body of an example is run:
+  Use `before` and `after` hooks to execute arbitrary code before and/or after
+  the body of an example is run:
 
-      before(:each) # run before each example
-      before(:all)  # run one time only, before all of the examples in a group
+  ```ruby
+  before(:example) # run before each example
+  before(:context) # run one time only, before all of the examples in a group
 
-      after(:each) # run after each example
-      after(:all)  # run one time only, after all of the examples in a group
+  after(:example) # run after each example
+  after(:context) # run one time only, after all of the examples in a group
+  ```
 
-  Before and after blocks are called in the following order:
+  `before` and `after` blocks are called in the following order:
 
-      before suite
-      before all
-      before each
-      after  each
-      after  all
-      after  suite
+  ```ruby
+  before :suite
+  before :context
+  before :example
+  after  :example
+  after  :context
+  after  :suite
+  ```
+
+  A bare `before` or `after` hook defaults to the `:example` scope.
 
   `before` and `after` hooks can be defined directly in the example groups they
-  should run in, or in a global RSpec.configure block.
+  should run in, or in a global `RSpec.configure` block. Note that the status of
+  the example does not affect the hooks.
 
-  Setting instance variables are not supported in `before(:suite)`.
+  **WARNING:** Setting instance variables are not supported in `before(:suite)`.
 
-  Mocks are only supported in `before(:each)`.
+  **WARNING:** Mocks are only supported in `before(:example)`.
 
-  Scenario: define before(:each) block
-    Given a file named "before_each_spec.rb" with:
+  **WARNING:** `around` hooks will execute *before* any `before` hooks, and *after*
+  any `after` hooks regardless of the context they were defined in.
+
+  Note: the `:example` and `:context` scopes are also available as `:each` and
+  `:all`, respectively. Use whichever you prefer.
+
+  Scenario: Define `before(:example)` block
+    Given a file named "before_example_spec.rb" with:
       """ruby
       require "rspec/expectations"
 
@@ -36,12 +49,12 @@ Feature: before and after hooks
         end
       end
 
-      describe Thing do
-        before(:each) do
+      RSpec.describe Thing do
+        before(:example) do
           @thing = Thing.new
         end
 
-        describe "initialized in before(:each)" do
+        describe "initialized in before(:example)" do
           it "has 0 widgets" do
             expect(@thing.widgets.count).to eq(0)
           end
@@ -56,11 +69,11 @@ Feature: before and after hooks
         end
       end
       """
-    When I run `rspec before_each_spec.rb`
+    When I run `rspec before_example_spec.rb`
     Then the examples should all pass
 
-  Scenario: define before(:all) block in example group
-    Given a file named "before_all_spec.rb" with:
+  Scenario: Define `before(:context)` block in example group
+    Given a file named "before_context_spec.rb" with:
       """ruby
       require "rspec/expectations"
 
@@ -70,12 +83,12 @@ Feature: before and after hooks
         end
       end
 
-      describe Thing do
-        before(:all) do
+      RSpec.describe Thing do
+        before(:context) do
           @thing = Thing.new
         end
 
-        describe "initialized in before(:all)" do
+        describe "initialized in before(:context)" do
           it "has 0 widgets" do
             expect(@thing.widgets.count).to eq(0)
           end
@@ -90,17 +103,17 @@ Feature: before and after hooks
         end
       end
       """
-    When I run `rspec before_all_spec.rb`
+    When I run `rspec before_context_spec.rb`
     Then the examples should all pass
 
-    When I run `rspec before_all_spec.rb:15`
+    When I run `rspec before_context_spec.rb:15`
     Then the examples should all pass
 
-  Scenario: failure in before(:all) block
-    Given a file named "before_all_spec.rb" with:
+  Scenario: Failure in `before(:context)` block
+    Given a file named "before_context_spec.rb" with:
       """ruby
-      describe "an error in before(:all)" do
-        before(:all) do
+      RSpec.describe "an error in before(:context)" do
+        before(:context) do
           raise "oops"
         end
 
@@ -110,8 +123,8 @@ Feature: before and after hooks
         it "fails this example, too" do
         end
 
-        after(:all) do
-          puts "after all ran"
+        after(:context) do
+          puts "after context ran"
         end
 
         describe "nested group" do
@@ -128,11 +141,11 @@ Feature: before and after hooks
         end
       end
       """
-    When I run `rspec before_all_spec.rb --format documentation`
+    When I run `rspec before_context_spec.rb --format documentation`
     Then the output should contain "5 examples, 5 failures"
     And the output should contain:
       """
-      an error in before(:all)
+      an error in before(:context)
         fails this example (FAILED - 1)
         fails this example, too (FAILED - 2)
         nested group
@@ -140,22 +153,22 @@ Feature: before and after hooks
           fails this fourth example (FAILED - 4)
           yet another level deep
             fails this last example (FAILED - 5)
-      after all ran
+      after context ran
       """
 
-    When I run `rspec before_all_spec.rb:9 --format documentation`
+    When I run `rspec before_context_spec.rb:9 --format documentation`
     Then the output should contain "1 example, 1 failure"
     And the output should contain:
       """
-      an error in before(:all)
+      an error in before(:context)
         fails this example, too (FAILED - 1)
       """
 
-  Scenario: failure in after(:all) block
-    Given a file named "after_all_spec.rb" with:
+  Scenario: Failure in `after(:context)` block
+    Given a file named "after_context_spec.rb" with:
       """ruby
-      describe "an error in after(:all)" do
-        after(:all) do
+      RSpec.describe "an error in after(:context)" do
+        after(:context) do
           raise StandardError.new("Boom!")
         end
 
@@ -166,37 +179,63 @@ Feature: before and after hooks
         end
       end
       """
-    When I run `rspec after_all_spec.rb`
-    Then the examples should all pass
-    And the output should contain:
+    When I run `rspec after_context_spec.rb`
+    Then it should fail with:
       """
-      An error occurred in an after(:all) hook.
-        StandardError: Boom!
+      An error occurred in an `after(:context)` hook.
+      Failure/Error: raise StandardError.new("Boom!")
+
+      StandardError:
+        Boom!
+      # ./after_context_spec.rb:3
       """
 
-  Scenario: define before and after blocks in configuration
+  Scenario: A failure in an example does not affect hooks
+    Given a file named "failure_in_example_spec.rb" with:
+      """ruby
+      RSpec.describe "a failing example does not affect hooks" do
+        before(:context) { puts "before context runs" }
+        before(:example) { puts "before example runs" }
+        after(:example) { puts "after example runs" }
+        after(:context) { puts "after context runs" }
+
+        it "fails the example but runs the hooks" do
+          raise "An Error"
+        end
+      end
+      """
+    When I run `rspec failure_in_example_spec.rb`
+    Then it should fail with:
+      """
+      before context runs
+      before example runs
+      after example runs
+      Fafter context runs
+      """
+
+  Scenario: Define `before` and `after` blocks in configuration
     Given a file named "befores_in_configuration_spec.rb" with:
       """ruby
       require "rspec/expectations"
 
       RSpec.configure do |config|
-        config.before(:each) do
-          @before_each = "before each"
+        config.before(:example) do
+          @before_example = "before example"
         end
-        config.before(:all) do
-          @before_all = "before all"
+        config.before(:context) do
+          @before_context = "before context"
         end
       end
 
-      describe "stuff in before blocks" do
-        describe "with :all" do
+      RSpec.describe "stuff in before blocks" do
+        describe "with :context" do
           it "should be available in the example" do
-            expect(@before_all).to eq("before all")
+            expect(@before_context).to eq("before context")
           end
         end
-        describe "with :each" do
+        describe "with :example" do
           it "should be available in the example" do
-            expect(@before_each).to eq("before each")
+            expect(@before_example).to eq("before example")
           end
         end
       end
@@ -204,26 +243,34 @@ Feature: before and after hooks
     When I run `rspec befores_in_configuration_spec.rb`
     Then the examples should all pass
 
-  Scenario: before/after blocks are run in order
+  Scenario: `before`/`after` blocks are run in order
     Given a file named "ensure_block_order_spec.rb" with:
       """ruby
       require "rspec/expectations"
 
-      describe "before and after callbacks" do
-        before(:all) do
-          puts "before all"
+      RSpec.describe "before and after callbacks" do
+        before(:context) do
+          puts "before context"
         end
 
-        before(:each) do
-          puts "before each"
+        before(:example) do
+          puts "before example"
         end
 
-        after(:each) do
-          puts "after each"
+        before do
+          puts "also before example but by default"
         end
 
-        after(:all) do
-          puts "after all"
+        after(:example) do
+          puts "after example"
+        end
+
+        after do
+          puts "also after example but by default"
+        end
+
+        after(:context) do
+          puts "after context"
         end
 
         it "gets run in order" do
@@ -234,13 +281,15 @@ Feature: before and after hooks
     When I run `rspec --format progress ensure_block_order_spec.rb`
     Then the output should contain:
       """
-      before all
-      before each
-      after each
-      .after all
+      before context
+      before example
+      also before example but by default
+      also after example but by default
+      after example
+      .after context
       """
 
-  Scenario: before/after blocks defined in config are run in order
+  Scenario: `before`/`after` blocks defined in configuration are run in order
     Given a file named "configuration_spec.rb" with:
       """ruby
       require "rspec/expectations"
@@ -250,20 +299,20 @@ Feature: before and after hooks
           puts "before suite"
         end
 
-        config.before(:all) do
-          puts "before all"
+        config.before(:context) do
+          puts "before context"
         end
 
-        config.before(:each) do
-          puts "before each"
+        config.before(:example) do
+          puts "before example"
         end
 
-        config.after(:each) do
-          puts "after each"
+        config.after(:example) do
+          puts "after example"
         end
 
-        config.after(:all) do
-          puts "after all"
+        config.after(:context) do
+          puts "after context"
         end
 
         config.after(:suite) do
@@ -271,7 +320,7 @@ Feature: before and after hooks
         end
       end
 
-      describe "ignore" do
+      RSpec.describe "ignore" do
         example "ignore" do
         end
       end
@@ -280,141 +329,141 @@ Feature: before and after hooks
     Then the output should contain:
       """
       before suite
-      before all
-      before each
-      after each
-      .after all
+      before context
+      before example
+      after example
+      .after context
       after suite
       """
 
-  Scenario: before/after all blocks are run once
-    Given a file named "before_and_after_all_spec.rb" with:
+  Scenario: `before`/`after` context blocks are run once
+    Given a file named "before_and_after_context_spec.rb" with:
       """ruby
-      describe "before and after callbacks" do
-        before(:all) do
-          puts "outer before all"
+      RSpec.describe "before and after callbacks" do
+        before(:context) do
+          puts "outer before context"
         end
 
         example "in outer group" do
         end
 
-        after(:all) do
-          puts "outer after all"
+        after(:context) do
+          puts "outer after context"
         end
 
         describe "nested group" do
-          before(:all) do
-            puts "inner before all"
+          before(:context) do
+            puts "inner before context"
           end
 
           example "in nested group" do
           end
 
-          after(:all) do
-            puts "inner after all"
+          after(:context) do
+            puts "inner after context"
           end
         end
 
       end
       """
-    When I run `rspec --format progress before_and_after_all_spec.rb`
+    When I run `rspec --format progress before_and_after_context_spec.rb`
     Then the examples should all pass
     And the output should contain:
       """
-      outer before all
-      .inner before all
-      .inner after all
-      outer after all
+      outer before context
+      .inner before context
+      .inner after context
+      outer after context
       """
 
-    When I run `rspec --format progress before_and_after_all_spec.rb:14`
+    When I run `rspec --format progress before_and_after_context_spec.rb:14`
     Then the examples should all pass
     And the output should contain:
       """
-      outer before all
-      inner before all
-      .inner after all
-      outer after all
+      outer before context
+      inner before context
+      .inner after context
+      outer after context
       """
 
-    When I run `rspec --format progress before_and_after_all_spec.rb:6`
+    When I run `rspec --format progress before_and_after_context_spec.rb:6`
     Then the examples should all pass
     And the output should contain:
       """
-      outer before all
-      .outer after all
+      outer before context
+      .outer after context
       """
 
-  Scenario: nested examples have access to state set in outer before(:all)
-    Given a file named "before_all_spec.rb" with:
+  Scenario: Nested examples have access to state set in outer `before(:context)`
+    Given a file named "before_context_spec.rb" with:
       """ruby
-      describe "something" do
-        before :all do
+      RSpec.describe "something" do
+        before :context do
           @value = 123
         end
 
         describe "nested" do
-          it "access state set in before(:all)" do
+          it "access state set in before(:context)" do
             expect(@value).to eq(123)
           end
 
           describe "nested more deeply" do
-            it "access state set in before(:all)" do
+            it "access state set in before(:context)" do
               expect(@value).to eq(123)
             end
           end
         end
 
         describe "nested in parallel" do
-          it "access state set in before(:all)" do
+          it "access state set in before(:context)" do
             expect(@value).to eq(123)
           end
         end
       end
       """
-    When I run `rspec before_all_spec.rb`
+    When I run `rspec before_context_spec.rb`
     Then the examples should all pass
 
-  Scenario: before/after all blocks have access to state
-    Given a file named "before_and_after_all_spec.rb" with:
+  Scenario: `before`/`after` context blocks have access to state
+    Given a file named "before_and_after_context_spec.rb" with:
       """ruby
-      describe "before and after callbacks" do
-        before(:all) do
-          @outer_state = "set in outer before all"
+      RSpec.describe "before and after callbacks" do
+        before(:context) do
+          @outer_state = "set in outer before context"
         end
 
         example "in outer group" do
-          expect(@outer_state).to eq("set in outer before all")
+          expect(@outer_state).to eq("set in outer before context")
         end
 
         describe "nested group" do
-          before(:all) do
-            @inner_state = "set in inner before all"
+          before(:context) do
+            @inner_state = "set in inner before context"
           end
 
           example "in nested group" do
-            expect(@outer_state).to eq("set in outer before all")
-            expect(@inner_state).to eq("set in inner before all")
+            expect(@outer_state).to eq("set in outer before context")
+            expect(@inner_state).to eq("set in inner before context")
           end
 
-          after(:all) do
-            expect(@inner_state).to eq("set in inner before all")
+          after(:context) do
+            expect(@inner_state).to eq("set in inner before context")
           end
         end
 
-        after(:all) do
-          expect(@outer_state).to eq("set in outer before all")
+        after(:context) do
+          expect(@outer_state).to eq("set in outer before context")
         end
       end
       """
-    When I run `rspec before_and_after_all_spec.rb`
+    When I run `rspec before_and_after_context_spec.rb`
     Then the examples should all pass
 
-  Scenario: exception in before(:each) is captured and reported as failure
-    Given a file named "error_in_before_each_spec.rb" with:
+  Scenario: Exception in `before(:example)` is captured and reported as failure
+    Given a file named "error_in_before_example_spec.rb" with:
       """ruby
-      describe "error in before(:each)" do
-        before(:each) do
+      RSpec.describe "error in before(:example)" do
+        before(:example) do
           raise "this error"
         end
 
@@ -422,6 +471,6 @@ Feature: before and after hooks
         end
       end
       """
-    When I run `rspec error_in_before_each_spec.rb`
+    When I run `rspec error_in_before_example_spec.rb`
     Then the output should contain "1 example, 1 failure"
     And the output should contain "this error"

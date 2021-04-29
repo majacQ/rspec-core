@@ -1,11 +1,130 @@
-require 'spec_helper'
 require 'tmpdir'
+require 'rspec/support/spec/in_sub_process'
 
 module RSpec::Core
-
   RSpec.describe Configuration do
+    include RSpec::Support::InSubProcess
 
     let(:config) { Configuration.new }
+    let(:exclusion_filter) { config.exclusion_filter.rules }
+    let(:inclusion_filter) { config.inclusion_filter.rules }
+
+    before { config.world = RSpec.world }
+
+    describe '#on_example_group_definition' do
+      before do
+        RSpec.configure do |c|
+          c.on_example_group_definition do |example_group|
+            example_group.examples.first.metadata[:new_key] = :new_value
+          end
+        end
+      end
+
+      it 'successfully invokes the block' do
+        RSpec.describe("group") { it "example 1" do; end}
+        example = RSpec.world.example_groups.first.examples.first
+        expect(example.metadata[:new_key]).to eq(:new_value)
+      end
+    end
+
+    describe "#fail_fast" do
+      it "defaults to `nil`" do
+        expect(RSpec::Core::Configuration.new.fail_fast).to be(nil)
+      end
+    end
+
+    describe "#fail_fast=" do
+      context 'when true' do
+        it 'is set to true' do
+          config.fail_fast = true
+          expect(config.fail_fast).to eq true
+        end
+      end
+
+      context "when 'true'" do
+        it 'is set to true' do
+          config.fail_fast = 'true'
+          expect(config.fail_fast).to eq true
+        end
+      end
+
+      context "when false" do
+        it 'is set to false' do
+          config.fail_fast = false
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when 'false'" do
+        it 'is set to false' do
+          config.fail_fast = 'false'
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when 0" do
+        it 'is set to false' do
+          config.fail_fast = 0
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when integer number" do
+        it 'is set to number' do
+          config.fail_fast = 5
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when floating point number" do
+        it 'is set to integer number' do
+          config.fail_fast = 5.9
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when string represeting an integer number" do
+        it 'is set to number' do
+          config.fail_fast = '5'
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when nil" do
+        it 'is nil' do
+          config.fail_fast = nil
+          expect(config.fail_fast).to eq nil
+        end
+      end
+
+      context "when unrecognized value" do
+        before do
+          allow(RSpec).to receive(:warning)
+        end
+
+        it 'raises an error' do
+          expect {
+            config.fail_fast = 'yes'
+          }.to raise_error(ArgumentError, /Cannot set `RSpec.configuration.fail_fast`/i)
+        end
+      end
+    end
+
+    describe 'fail_if_no_examples' do
+      it 'defaults to false' do
+        expect(RSpec::Core::Configuration.new.fail_if_no_examples).to be(false)
+      end
+
+      it 'can be set to true' do
+        config.fail_if_no_examples = true
+        expect(config.fail_if_no_examples).to eq(true)
+      end
+
+      it 'can be set to false' do
+        config.fail_if_no_examples = false
+        expect(config.fail_if_no_examples).to eq(false)
+      end
+    end
 
     describe '#deprecation_stream' do
       it 'defaults to standard error' do
@@ -13,9 +132,32 @@ module RSpec::Core
       end
 
       it 'is configurable' do
-        io = double 'deprecation io'
+        io = StringIO.new
         config.deprecation_stream = io
         expect(config.deprecation_stream).to eq io
+      end
+
+      context 'when the reporter has already been initialized' do
+        before do
+          config.reporter
+          allow(config).to receive(:warn)
+        end
+
+        it 'prints a notice indicating the reconfigured output_stream will be ignored' do
+          config.deprecation_stream = double("IO")
+          expect(config).to have_received(:warn).with(/deprecation_stream.*#{__FILE__}:#{__LINE__ - 1}/)
+        end
+
+        it 'does not change the value of `deprecation_stream`' do
+          value = config.deprecation_stream
+          config.deprecation_stream = double("IO")
+          expect(config.deprecation_stream).to equal(value)
+        end
+
+        it 'does not print a warning if set to the value it already has' do
+          config.deprecation_stream = config.deprecation_stream
+          expect(config).not_to have_received(:warn)
+        end
       end
     end
 
@@ -23,9 +165,11 @@ module RSpec::Core
       it 'defaults to standard output' do
         expect(config.output_stream).to eq $stdout
       end
+    end
 
+    describe "#output_stream=" do
       it 'is configurable' do
-        io = double 'output io'
+        io = StringIO.new
         config.output_stream = io
         expect(config.output_stream).to eq io
       end
@@ -54,8 +198,6 @@ module RSpec::Core
     end
 
     describe "#requires=" do
-      include_context "isolate load path mutation"
-
       def absolute_path_to(dir)
         File.expand_path("../../../../#{dir}", __FILE__)
       end
@@ -109,8 +251,17 @@ module RSpec::Core
 
     describe "#mock_framework" do
       it "defaults to :rspec" do
-        expect(config).to receive(:require).with('rspec/core/mocking_adapters/rspec')
-        config.mock_framework
+        expect(RSpec::Support).to receive(:require_rspec_core).with('mocking_adapters/rspec')
+        expect(config.mock_framework).to eq(MockingAdapters::RSpec)
+      end
+
+      context "when rspec-mocks is not installed" do
+        it 'gracefully falls back to :nothing' do
+          allow(RSpec::Support).to receive(:require_rspec_core).and_call_original
+          allow(RSpec::Support).to receive(:require_rspec_core).with('mocking_adapters/rspec').and_raise(LoadError)
+
+          expect(config.mock_framework).to eq(MockingAdapters::Null)
+        end
       end
     end
 
@@ -123,15 +274,14 @@ module RSpec::Core
 
     shared_examples "a configurable framework adapter" do |m|
       it "yields a config object if the framework_module supports it" do
-        custom_config = Struct.new(:custom_setting).new
         mod = Module.new
-        allow(mod).to receive_messages(:configuration => custom_config)
+        def mod.configuration; @config ||= Struct.new(:custom_setting).new; end
 
         config.send m, mod do |mod_config|
           mod_config.custom_setting = true
         end
 
-        expect(custom_config.custom_setting).to be_truthy
+        expect(mod.configuration.custom_setting).to be(true)
       end
 
       it "raises if framework module doesn't support configuration" do
@@ -150,12 +300,10 @@ module RSpec::Core
       it_behaves_like "a configurable framework adapter", :mock_with
 
       it "allows rspec-mocks to be configured with a provided block" do
-        mod = Module.new
-
-        expect(RSpec::Mocks.configuration).to receive(:add_stub_and_should_receive_to).with(mod)
+        expect(RSpec::Mocks.configuration).to receive(:verify_partial_doubles=).with(true)
 
         config.mock_with :rspec do |c|
-          c.add_stub_and_should_receive_to mod
+          c.verify_partial_doubles = true
         end
       end
 
@@ -168,13 +316,13 @@ module RSpec::Core
       end
 
       it 'uses the named adapter' do
-        expect(config).to receive(:require).with("rspec/core/mocking_adapters/mocha")
+        expect(RSpec::Support).to receive(:require_rspec_core).with('mocking_adapters/mocha')
         stub_const("RSpec::Core::MockingAdapters::Mocha", Module.new)
         config.mock_with :mocha
       end
 
       it "uses the null adapter when given :nothing" do
-        expect(config).to receive(:require).with('rspec/core/mocking_adapters/null').and_call_original
+        expect(RSpec::Support).to receive(:require_rspec_core).with('mocking_adapters/null').and_call_original
         config.mock_with :nothing
       end
 
@@ -191,9 +339,12 @@ module RSpec::Core
       end
 
       context 'when there are already some example groups defined' do
+        before { allow(RSpec::Support).to receive(:require_rspec_core) }
+
         it 'raises an error since this setting must be applied before any groups are defined' do
           allow(RSpec.world).to receive(:example_groups).and_return([double.as_null_object])
-          stub_const("RSpec::Core::MockingAdapters::Mocha", double(:framework_name => :mocha))
+          class_double("RSpec::Core::MockingAdapters::Mocha", :framework_name => :mocha).as_stubbed_const
+
           expect {
             config.mock_with :mocha
           }.to raise_error(/must be configured before any example groups are defined/)
@@ -206,7 +357,8 @@ module RSpec::Core
         end
 
         it 'does not raise an error if re-setting the same config' do
-          stub_const("RSpec::Core::MockingAdapters::Mocha", double(:framework_name => :mocha))
+          class_double("RSpec::Core::MockingAdapters::Mocha", :framework_name => :mocha).as_stubbed_const
+
           groups = []
           allow(RSpec.world).to receive_messages(:example_groups => groups)
           config.mock_with :mocha
@@ -216,49 +368,100 @@ module RSpec::Core
       end
     end
 
-    describe "#expectation_framework" do
+    describe "#expectation_frameworks" do
       it "defaults to :rspec" do
         expect(config).to receive(:require).with('rspec/expectations')
-        config.expectation_frameworks
+        expect(config.expectation_frameworks).to eq([RSpec::Matchers])
+      end
+
+      context "when rspec-expectations is not installed" do
+        def an_anonymous_module
+          an_object_having_attributes(:class => Module, :name => nil)
+        end
+
+        it 'gracefully falls back to an anonymous module' do
+          allow(config).to receive(:require).with('rspec/expectations').and_raise(LoadError)
+          expect(config.expectation_frameworks).to match([an_anonymous_module])
+        end
       end
     end
 
     describe "#expectation_framework=" do
-      it "delegates to expect_with=" do
+      it "delegates to expect_with" do
         expect(config).to receive(:expect_with).with(:rspec)
         config.expectation_framework = :rspec
       end
     end
 
+    def stub_expectation_adapters
+      stub_const("Test::Unit::Assertions", Module.new)
+      stub_const("Minitest::Assertions", Module.new)
+      stub_const("RSpec::Core::TestUnitAssertionsAdapter", Module.new)
+      stub_const("RSpec::Core::MinitestAssertionsAdapter", Module.new)
+      allow(config).to receive(:require)
+    end
+
     describe "#expect_with" do
       before do
-        stub_const("Test::Unit::Assertions", Module.new)
-        allow(config).to receive(:require)
+        stub_expectation_adapters
       end
 
       it_behaves_like "a configurable framework adapter", :expect_with
 
-      [
-        [:rspec,  'rspec/expectations'],
-        [:stdlib, 'test/unit/assertions']
-      ].each do |framework, required_file|
-        context "with #{framework}" do
-          it "requires #{required_file}" do
-            expect(config).to receive(:require).with(required_file)
-            config.expect_with framework
-          end
+      context "with :rspec" do
+        it "requires rspec/expectations" do
+          expect(config).to receive(:require).with('rspec/expectations')
+          config.expect_with :rspec
+        end
+
+        it "sets the expectation framework to ::RSpec::Matchers" do
+          config.expect_with :rspec
+          expect(config.expectation_frameworks).to eq [::RSpec::Matchers]
+        end
+      end
+
+      context "with :test_unit" do
+        it "requires rspec/core/test_unit_assertions_adapter" do
+          expect(config).to receive(:require).
+            with('rspec/core/test_unit_assertions_adapter')
+          config.expect_with :test_unit
+        end
+
+        it "sets the expectation framework to ::Test::Unit::Assertions" do
+          config.expect_with :test_unit
+          expect(config.expectation_frameworks).to eq [
+            ::RSpec::Core::TestUnitAssertionsAdapter
+          ]
+        end
+      end
+
+      context "with :minitest" do
+        it "requires rspec/core/minitest_assertions_adapter" do
+          expect(config).to receive(:require).
+            with('rspec/core/minitest_assertions_adapter')
+          config.expect_with :minitest
+        end
+
+        it "sets the expectation framework to ::Minitest::Assertions" do
+          config.expect_with :minitest
+          expect(config.expectation_frameworks).to eq [
+            ::RSpec::Core::MinitestAssertionsAdapter
+          ]
         end
       end
 
       it "supports multiple calls" do
         config.expect_with :rspec
-        config.expect_with :stdlib
-        expect(config.expectation_frameworks).to eq [RSpec::Matchers, Test::Unit::Assertions]
+        config.expect_with :minitest
+        expect(config.expectation_frameworks).to eq [
+          RSpec::Matchers,
+          RSpec::Core::MinitestAssertionsAdapter
+        ]
       end
 
       it "raises if block given with multiple args" do
         expect {
-          config.expect_with :rspec, :stdlib do |mod_config|
+          config.expect_with :rspec, :minitest do |mod_config|
           end
         }.to raise_error(/expect_with only accepts/)
       end
@@ -286,60 +489,67 @@ module RSpec::Core
         it 'does not raise an error if re-setting the same config' do
           groups = []
           allow(RSpec.world).to receive_messages(:example_groups => groups)
-          config.expect_with :stdlib
+          config.expect_with :minitest
           groups << double.as_null_object
-          config.expect_with :stdlib
+          config.expect_with :minitest
         end
-      end
-    end
-
-    describe "#expecting_with_rspec?" do
-      before do
-        stub_const("Test::Unit::Assertions", Module.new)
-        allow(config).to receive(:require)
-      end
-
-      it "returns false by default" do
-        expect(config).not_to be_expecting_with_rspec
-      end
-
-      it "returns true when `expect_with :rspec` has been configured" do
-        config.expect_with :rspec
-        expect(config).to be_expecting_with_rspec
-      end
-
-      it "returns true when `expect_with :rspec, :stdlib` has been configured" do
-        config.expect_with :rspec, :stdlib
-        expect(config).to be_expecting_with_rspec
-      end
-
-      it "returns true when `expect_with :stdlib, :rspec` has been configured" do
-        config.expect_with :stdlib, :rspec
-        expect(config).to be_expecting_with_rspec
-      end
-
-      it "returns false when `expect_with :stdlib` has been configured" do
-        config.expect_with :stdlib
-        expect(config).not_to be_expecting_with_rspec
       end
     end
 
     describe "#files_to_run" do
       it "loads files not following pattern if named explicitly" do
         assign_files_or_directories_to_run "spec/rspec/core/resources/a_bar.rb"
-        expect(config.files_to_run).to eq([      "spec/rspec/core/resources/a_bar.rb"])
+        expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_bar.rb")
       end
 
       it "prevents repetition of dir when start of the pattern" do
         config.pattern = "spec/**/a_spec.rb"
         assign_files_or_directories_to_run "spec"
-        expect(config.files_to_run).to eq(["spec/rspec/core/resources/a_spec.rb"])
+        expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb")
       end
 
       it "does not prevent repetition of dir when later of the pattern" do
         config.pattern = "rspec/**/a_spec.rb"
         assign_files_or_directories_to_run "spec"
-        expect(config.files_to_run).to eq(["spec/rspec/core/resources/a_spec.rb"])
+        expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb")
+      end
+
+      it "supports patterns starting with ./" do
+        config.pattern = "./spec/**/a_spec.rb"
+        assign_files_or_directories_to_run "spec"
+        expect(config.files_to_run).to contain_files("./spec/rspec/core/resources/a_spec.rb")
+      end
+
+      it "supports absolute path patterns" do
+        dir = File.expand_path("../resources", __FILE__)
+        config.pattern = File.join(dir, "**/*_spec.rb")
+        assign_files_or_directories_to_run "spec"
+
+        expect(config.files_to_run).to contain_files(
+          "./spec/rspec/core/resources/acceptance/foo_spec.rb",
+          "./spec/rspec/core/resources/a_spec.rb"
+        )
+      end
+
+      it "supports relative path patterns for an alternate directory from `spec`" do
+        Dir.chdir("./spec/rspec/core") do
+          config.pattern = "resources/**/*_spec.rb"
+          assign_files_or_directories_to_run "spec" # default dir
+
+          expect(config.files_to_run).to contain_files(
+            "resources/acceptance/foo_spec.rb",
+            "resources/a_spec.rb"
+          )
+        end
+      end
+
+      it "does not attempt to treat the pattern relative to `.` if it uses `**` in the first path segment as that would cause it load specs from vendored gems" do
+        Dir.chdir("./spec/rspec/core") do
+          config.pattern = "**/*_spec.rb"
+          assign_files_or_directories_to_run "spec" # default dir
+
+          expect(config.files_to_run).to contain_files()
+        end
       end
 
       it 'reloads when `files_or_directories_to_run` is reassigned' do
@@ -349,31 +559,27 @@ module RSpec::Core
         expect {
           config.files_or_directories_to_run = "spec"
         }.to change { config.files_to_run }.
-          to(["spec/rspec/core/resources/a_spec.rb"])
+          to(a_file_collection("spec/rspec/core/resources/a_spec.rb"))
+      end
+
+      it 'attempts to load the provided file names' do
+        assign_files_or_directories_to_run "path/to/some/file.rb"
+        expect(config.files_to_run).to contain_files("path/to/some/file.rb")
+      end
+
+      it 'does not attempt to load a file at the `default_path`' do
+        config.default_path = "path/to/dir"
+        assign_files_or_directories_to_run "path/to/dir"
+        expect(config.files_to_run).to eq([])
       end
 
       context "with <path>:<line_number>" do
-        it "overrides inclusion filters set on config" do
-          config.filter_run_including :foo => :bar
-          assign_files_or_directories_to_run "path/to/file.rb:37"
-          expect(config.inclusion_filter.size).to eq(1)
-          expect(config.inclusion_filter[:locations].keys.first).to match(/path\/to\/file\.rb$/)
-          expect(config.inclusion_filter[:locations].values.first).to eq([37])
-        end
-
         it "overrides inclusion filters set before config" do
           config.force(:inclusion_filter => {:foo => :bar})
           assign_files_or_directories_to_run "path/to/file.rb:37"
-          expect(config.inclusion_filter.size).to eq(1)
-          expect(config.inclusion_filter[:locations].keys.first).to match(/path\/to\/file\.rb$/)
-          expect(config.inclusion_filter[:locations].values.first).to eq([37])
-        end
-
-        it "clears exclusion filters set on config" do
-          config.exclusion_filter = { :foo => :bar }
-          assign_files_or_directories_to_run "path/to/file.rb:37"
-          expect(config.exclusion_filter).to be_empty,
-            "expected exclusion filter to be empty:\n#{config.exclusion_filter}"
+          expect(inclusion_filter.size).to eq(1)
+          expect(inclusion_filter[:locations].keys.first).to match(/path\/to\/file\.rb$/)
+          expect(inclusion_filter[:locations].values.first).to eq([37])
         end
 
         it "clears exclusion filters set before config" do
@@ -387,17 +593,24 @@ module RSpec::Core
       context "with default pattern" do
         it "loads files named _spec.rb" do
           assign_files_or_directories_to_run "spec/rspec/core/resources"
-          expect(config.files_to_run).to eq([      "spec/rspec/core/resources/a_spec.rb"])
+          expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb", "spec/rspec/core/resources/acceptance/foo_spec.rb")
         end
 
-        it "loads files in Windows", :if => RSpec.windows_os? do
+        it "loads files in Windows", :skip => !RSpec::Support::OS.windows? do
           assign_files_or_directories_to_run "C:\\path\\to\\project\\spec\\sub\\foo_spec.rb"
-          expect(config.files_to_run).to eq([      "C:/path/to/project/spec/sub/foo_spec.rb"])
+          expect(config.files_to_run).to contain_files("C:/path/to/project/spec/sub/foo_spec.rb")
         end
 
-        it "loads files in Windows when directory is specified", :if => RSpec.windows_os? do
+        it "loads files in Windows when directory is specified", :failing_on_windows_ci, :skip => !RSpec::Support::OS.windows? do
           assign_files_or_directories_to_run "spec\\rspec\\core\\resources"
-          expect(config.files_to_run).to eq([      "spec/rspec/core/resources/a_spec.rb"])
+          expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb")
+        end
+
+        it_behaves_like "handling symlinked directories when loading spec files" do
+          def loaded_files
+            assign_files_or_directories_to_run "spec"
+            config.files_to_run
+          end
         end
       end
 
@@ -422,128 +635,235 @@ module RSpec::Core
         end
       end
 
-      def specify_consistent_ordering_of_files_to_run
-        allow(File).to receive(:directory?).with('a') { true }
-        globbed_files = nil
-        allow(Dir).to receive(:[]).with(/^\{?a/) { globbed_files }
+      it 'loads files in passed directories in alphabetical order to avoid OS-specific file-globbing non-determinism' do
+        define_dirs "spec/unit" => [
+          ["spec/unit/b_spec.rb", "spec/unit/a_spec.rb"],
+          ["spec/unit/a_spec.rb", "spec/unit/b_spec.rb"]
+        ]
 
-        orderings = [
-          %w[ a/1.rb a/2.rb a/3.rb ],
-          %w[ a/2.rb a/1.rb a/3.rb ],
-          %w[ a/3.rb a/2.rb a/1.rb ]
-        ].map do |files|
-          globbed_files = files
-          yield
-          config.files_to_run
-        end
-
-        expect(orderings.uniq.size).to eq(1)
+        expect(assign_files_or_directories_to_run "spec/unit").to match [
+          file_at("spec/unit/a_spec.rb"),
+          file_at("spec/unit/b_spec.rb")
+        ]
+        expect(assign_files_or_directories_to_run "spec/unit").to match [
+          file_at("spec/unit/a_spec.rb"),
+          file_at("spec/unit/b_spec.rb")
+        ]
       end
 
-      context 'when the given directories match the pattern' do
-        it 'orders the files in a consistent ordering, regardless of the underlying OS ordering' do
-          specify_consistent_ordering_of_files_to_run do
-            config.pattern = 'a/*.rb'
-            assign_files_or_directories_to_run 'a'
-          end
+      it 'respects the user-specified order of files and directories passed at the command line' do
+        define_dirs "spec/b" => [["spec/b/1_spec.rb", "spec/b/2_spec.rb"]],
+                    "spec/c" => [["spec/c/1_spec.rb", "spec/c/2_spec.rb"]]
+
+        expect(assign_files_or_directories_to_run "spec/b", "spec/a1_spec.rb", "spec/c", "spec/a2_spec.rb").to match [
+          file_at("spec/b/1_spec.rb"), file_at("spec/b/2_spec.rb"),
+          file_at("spec/a1_spec.rb"),
+          file_at("spec/c/1_spec.rb"), file_at("spec/c/2_spec.rb"),
+          file_at("spec/a2_spec.rb")
+        ]
+      end
+
+      it 'deduplicates spec files that are listed individually and present in a passed dir' do
+        define_dirs "spec/unit" => [[
+          "spec/unit/a_spec.rb",
+          "spec/unit/b_spec.rb",
+          "spec/unit/c_spec.rb"
+        ]]
+
+        expect(assign_files_or_directories_to_run "spec/unit/b_spec.rb", "spec/unit").to match [
+          file_at("spec/unit/b_spec.rb"),
+          file_at("spec/unit/a_spec.rb"),
+          file_at("spec/unit/c_spec.rb")
+        ]
+
+        expect(assign_files_or_directories_to_run "spec/unit", "spec/unit/b_spec.rb").to match [
+          file_at("spec/unit/a_spec.rb"),
+          file_at("spec/unit/b_spec.rb"),
+          file_at("spec/unit/c_spec.rb")
+        ]
+      end
+
+      def define_dirs(dirs_hash)
+        allow(File).to receive(:directory?) do |path|
+          !path.end_with?(".rb")
+        end
+
+        allow(Dir).to receive(:[]).and_return([])
+
+        dirs_hash.each do |dir, sequential_glob_return_values|
+          allow(Dir).to receive(:[]).with(
+            a_string_including(dir, config.pattern)
+          ).and_return(*sequential_glob_return_values)
         end
       end
 
-      context 'when the pattern is given relative to the given directories' do
-        it 'orders the files in a consistent ordering, regardless of the underlying OS ordering' do
-          specify_consistent_ordering_of_files_to_run do
-            config.pattern = '*.rb'
-            assign_files_or_directories_to_run 'a'
-          end
+      def file_at(relative_path)
+        eq(relative_path).or eq(File.expand_path(relative_path))
+      end
+    end
+
+    describe "#pattern" do
+      context "with single pattern" do
+        before { config.pattern = "**/*_foo.rb" }
+
+        it "loads all explicitly specified files, even those that do not match the pattern" do
+          file_1 = File.expand_path(File.dirname(__FILE__) + "/resources/a_foo.rb")
+          file_2 = File.expand_path(File.dirname(__FILE__) + "/resources/a_bar.rb")
+
+          assign_files_or_directories_to_run file_1, file_2
+          expect(config.files_to_run).to contain_exactly(file_1, file_2)
+        end
+
+        it "loads files in directories following pattern" do
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).to include("#{dir}/a_foo.rb")
+        end
+
+        it "does not load files in directories not following pattern" do
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).not_to include("#{dir}/a_bar.rb")
+        end
+
+        it "ignores pattern if files are specified" do
+          files = [
+            File.expand_path(File.dirname(__FILE__) + "/resources/a_foo.rb"),
+            File.expand_path(File.dirname(__FILE__) + "/resources/a_spec.rb")
+          ]
+          assign_files_or_directories_to_run(files)
+          expect(config.files_to_run).to match_array(files)
         end
       end
 
-      context 'when given multiple file paths' do
-        it 'orders the files in a consistent ordering, regardless of the given order' do
-          allow(File).to receive(:directory?) { false } # fake it into thinking these a full file paths
+      context "with multiple patterns" do
+        it "supports comma separated values" do
+          config.pattern = "**/*_foo.rb,**/*_bar.rb"
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).to include("#{dir}/a_foo.rb")
+          expect(config.files_to_run).to include("#{dir}/a_bar.rb")
+        end
 
-          files = ['a/b/c_spec.rb', 'c/b/a_spec.rb']
-          assign_files_or_directories_to_run(*files)
-          ordering_1 = config.files_to_run
+        it "supports comma separated values with spaces" do
+          config.pattern = "**/*_foo.rb, **/*_bar.rb"
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).to include("#{dir}/a_foo.rb")
+          expect(config.files_to_run).to include("#{dir}/a_bar.rb")
+        end
 
-          assign_files_or_directories_to_run(*files.reverse)
-          ordering_2 = config.files_to_run
+        it "supports curly braces glob syntax" do
+          config.pattern = "**/*_{foo,bar}.rb"
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).to include("#{dir}/a_foo.rb")
+          expect(config.files_to_run).to include("#{dir}/a_bar.rb")
+        end
+      end
 
-          expect(ordering_1).to eq(ordering_2)
+      context "after files have already been loaded" do
+        it 'warns that it will have no effect' do
+          expect_warning_with_call_site(__FILE__, __LINE__ + 2, /has no effect/)
+          config.load_spec_files
+          config.pattern = "rspec/**/*.spec"
+        end
+
+        it 'does not warn if reset is called after load_spec_files' do
+          config.load_spec_files
+          config.reset
+          expect(RSpec).to_not receive(:warning)
+          config.pattern = "rspec/**/*.spec"
+        end
+      end
+
+      context "after `files_to_run` has been accessed but before files have been loaded" do
+        it 'still takes affect' do
+          file = File.expand_path(File.dirname(__FILE__) + "/resources/a_foo.rb")
+          assign_files_or_directories_to_run File.dirname(file)
+          expect(config.files_to_run).not_to include(file)
+          config.pattern = "**/*_foo.rb"
+          expect(config.files_to_run).to include(file)
         end
       end
     end
 
-    %w[pattern= filename_pattern=].each do |setter|
-      describe "##{setter}" do
-        context "with single pattern" do
-          before { config.send(setter, "**/*_foo.rb") }
-          it "loads files following pattern" do
-            file = File.expand_path(File.dirname(__FILE__) + "/resources/a_foo.rb")
-            assign_files_or_directories_to_run file
-            expect(config.files_to_run).to include(file)
-          end
+    describe "#exclude_pattern" do
+      context "with single pattern" do
+        before { config.exclude_pattern = "**/*_foo.rb" }
 
-          it "loads files in directories following pattern" do
-            dir = File.expand_path(File.dirname(__FILE__) + "/resources")
-            assign_files_or_directories_to_run dir
-            expect(config.files_to_run).to include("#{dir}/a_foo.rb")
-          end
-
-          it "does not load files in directories not following pattern" do
-            dir = File.expand_path(File.dirname(__FILE__) + "/resources")
-            assign_files_or_directories_to_run dir
-            expect(config.files_to_run).not_to include("#{dir}/a_bar.rb")
-          end
+        it "does not load files in directories following exclude pattern" do
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).not_to include("#{dir}/a_foo.rb")
         end
 
-        context "with multiple patterns" do
-          it "supports comma separated values" do
-            config.send(setter, "**/*_foo.rb,**/*_bar.rb")
-            dir = File.expand_path(File.dirname(__FILE__) + "/resources")
-            assign_files_or_directories_to_run dir
-            expect(config.files_to_run).to include("#{dir}/a_foo.rb")
-            expect(config.files_to_run).to include("#{dir}/a_bar.rb")
-          end
-
-          it "supports comma separated values with spaces" do
-            config.send(setter, "**/*_foo.rb, **/*_bar.rb")
-            dir = File.expand_path(File.dirname(__FILE__) + "/resources")
-            assign_files_or_directories_to_run dir
-            expect(config.files_to_run).to include("#{dir}/a_foo.rb")
-            expect(config.files_to_run).to include("#{dir}/a_bar.rb")
-          end
-
-          it "supports curly braces glob syntax" do
-            config.send(setter, "**/*_{foo,bar}.rb")
-            dir = File.expand_path(File.dirname(__FILE__) + "/resources")
-            assign_files_or_directories_to_run dir
-            expect(config.files_to_run).to include("#{dir}/a_foo.rb")
-            expect(config.files_to_run).to include("#{dir}/a_bar.rb")
-          end
+        it "loads files in directories not following exclude pattern" do
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).to include("#{dir}/a_spec.rb")
         end
 
-        context "after files have already been loaded" do
-          it 'will warn that it will have no effect' do
-            expect_warning_with_call_site(__FILE__, __LINE__ + 2, /has no effect/)
-            config.load_spec_files
-            config.send(setter, "rspec/**/*.spec")
-          end
-
-          it 'will not warn if reset is called after load_spec_files' do
-            config.load_spec_files
-            config.reset
-            expect(RSpec).to_not receive(:warning)
-            config.send(setter, "rspec/**/*.spec")
-          end
+        it "ignores exclude_pattern if files are specified" do
+          files = [
+            File.expand_path(File.dirname(__FILE__) + "/resources/a_foo.rb"),
+            File.expand_path(File.dirname(__FILE__) + "/resources/a_spec.rb")
+          ]
+          assign_files_or_directories_to_run(files)
+          expect(config.files_to_run).to match_array(files)
         end
       end
-    end
 
-    describe "path with line number" do
-      it "assigns the line number as a location filter" do
-        assign_files_or_directories_to_run "path/to/a_spec.rb:37"
-        expect(config.filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37]}})
+      context "with multiple patterns" do
+        it "supports comma separated values" do
+          config.exclude_pattern = "**/*_foo.rb,**/*_bar.rb"
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).not_to include("#{dir}/a_foo.rb")
+          expect(config.files_to_run).not_to include("#{dir}/a_bar.rb")
+        end
+
+        it "supports comma separated values with spaces" do
+          config.exclude_pattern = "**/*_foo.rb, **/*_bar.rb"
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).not_to include("#{dir}/a_foo.rb")
+          expect(config.files_to_run).not_to include("#{dir}/a_bar.rb")
+        end
+
+        it "supports curly braces glob syntax" do
+          config.exclude_pattern = "**/*_{foo,bar}.rb"
+          dir = File.expand_path(File.dirname(__FILE__) + "/resources")
+          assign_files_or_directories_to_run dir
+          expect(config.files_to_run).not_to include("#{dir}/a_foo.rb")
+          expect(config.files_to_run).not_to include("#{dir}/a_bar.rb")
+        end
+      end
+
+      context "after files have already been loaded" do
+        it 'warns that it will have no effect' do
+          expect_warning_with_call_site(__FILE__, __LINE__ + 2, /has no effect/)
+          config.load_spec_files
+          config.exclude_pattern = "rspec/**/*.spec"
+        end
+
+        it 'does not warn if reset is called after load_spec_files' do
+          config.load_spec_files
+          config.reset
+          expect(RSpec).to_not receive(:warning)
+          config.exclude_pattern = "rspec/**/*.spec"
+        end
+      end
+
+      context "after `files_to_run` has been accessed but before files have been loaded" do
+        it 'still takes affect' do
+          config.pattern = "**/*.rb"
+          file = File.expand_path(File.dirname(__FILE__) + "/resources/a_foo.rb")
+          assign_files_or_directories_to_run File.dirname(file)
+          expect(config.files_to_run).to include(file)
+          config.exclude_pattern = "**/*_foo.rb"
+          expect(config.files_to_run).not_to include(file)
+        end
       end
     end
 
@@ -551,7 +871,7 @@ module RSpec::Core
       it "overrides filters" do
         config.filter_run :focused => true
         config.full_description = "foo"
-        expect(config.filter).not_to have_key(:focused)
+        expect(inclusion_filter).not_to have_key(:focused)
       end
 
       it 'is possible to access the full description regular expression' do
@@ -569,36 +889,80 @@ module RSpec::Core
     context "with line number" do
       it "assigns the file and line number as a location filter" do
         assign_files_or_directories_to_run "path/to/a_spec.rb:37"
-        expect(config.filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37]}})
+        expect(inclusion_filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37]}})
       end
 
       it "assigns multiple files with line numbers as location filters" do
         assign_files_or_directories_to_run "path/to/a_spec.rb:37", "other_spec.rb:44"
-        expect(config.filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37],
+        expect(inclusion_filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37],
                                                 File.expand_path("other_spec.rb") => [44]}})
       end
 
       it "assigns files with multiple line numbers as location filters" do
         assign_files_or_directories_to_run "path/to/a_spec.rb:37", "path/to/a_spec.rb:44"
-        expect(config.filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37, 44]}})
+        expect(inclusion_filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [37, 44]}})
       end
     end
 
     context "with multiple line numbers" do
       it "assigns the file and line numbers as a location filter" do
         assign_files_or_directories_to_run "path/to/a_spec.rb:1:3:5:7"
-        expect(config.filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [1,3,5,7]}})
+        expect(inclusion_filter).to eq({:locations => {File.expand_path("path/to/a_spec.rb") => [1,3,5,7]}})
+      end
+    end
+
+    it "allows file names with brackets" do
+      assign_files_or_directories_to_run "./path/to/a_[1:2]spec.rb"
+      expect(config.files_to_run).to contain_files("./path/to/a_[1:2]spec.rb")
+
+      assign_files_or_directories_to_run "./path/to/a_spec.rb[foo]"
+      expect(config.files_to_run).to contain_files("./path/to/a_spec.rb[foo]")
+    end
+
+    context "with an example id" do
+      it "assigns the file and id as an ids filter" do
+        assign_files_or_directories_to_run "./path/to/a_spec.rb[1:2]"
+        expect(inclusion_filter).to eq(:ids => { "./path/to/a_spec.rb" => ["1:2"] })
+      end
+    end
+
+    context "with a single file with multiple example ids" do
+      it "assigns the file and ids as an ids filter" do
+        assign_files_or_directories_to_run "./path/to/a_spec.rb[1:2,1:3]"
+        expect(inclusion_filter).to eq(:ids => { "./path/to/a_spec.rb" => ["1:2", "1:3"] })
+      end
+
+      it "ignores whitespace between scoped ids" do
+        assign_files_or_directories_to_run "./path/to/a_spec.rb[1:2 , 1:3]"
+        expect(inclusion_filter).to eq(:ids => { "./path/to/a_spec.rb" => ["1:2", "1:3"] })
+      end
+    end
+
+    context "with multiple files with ids" do
+      it "assigns all of them to the ids filter" do
+        assign_files_or_directories_to_run "./path/to/a_spec.rb[1:2,1:3]", "./path/to/b_spec.rb[1:4]"
+        expect(inclusion_filter).to eq(:ids => {
+          "./path/to/a_spec.rb" => ["1:2", "1:3"],
+          "./path/to/b_spec.rb" => ["1:4"]
+        })
+      end
+    end
+
+    context "with the same file specified multiple times with different scoped ids" do
+      it "unions all the ids" do
+        assign_files_or_directories_to_run "./path/to/a_spec.rb[1:2]", "./path/to/a_spec.rb[1:3]"
+        expect(inclusion_filter).to eq(:ids => { "./path/to/a_spec.rb" => ["1:2", "1:3"] })
       end
     end
 
     it "assigns the example name as the filter on description" do
       config.full_description = "foo"
-      expect(config.filter).to eq({:full_description => /foo/})
+      expect(inclusion_filter).to eq({:full_description => /foo/})
     end
 
     it "assigns the example names as the filter on description if description is an array" do
       config.full_description = [ "foo", "bar" ]
-      expect(config.filter).to eq({:full_description => Regexp.union(/foo/, /bar/)})
+      expect(inclusion_filter).to eq({:full_description => Regexp.union(/foo/, /bar/)})
     end
 
     it 'is possible to access the full description regular expression' do
@@ -610,10 +974,67 @@ module RSpec::Core
       it 'defaults to "spec"' do
         expect(config.default_path).to eq('spec')
       end
+
+      it 'adds to the `project_source_dirs`' do
+        expect {
+          config.default_path = 'test'
+        }.to change { config.project_source_dirs.include?('test') }.from(false).to(true)
+      end
+    end
+
+    config_methods = %w[ include extend prepend ]
+    config_methods.each do |config_method|
+      it "raises an immediate `TypeError` when you attempt to `config.#{config_method}` with something besides a module" do
+        expect {
+          config.send(config_method, :not_a_module)
+        }.to raise_error(TypeError, a_string_including(
+          "configuration.#{config_method}",
+          "expects a module but got", "not_a_module"
+        ))
+      end
+    end
+
+    describe "#include_context" do
+      context "with no metadata filters" do
+        it 'includes the named shared example group in all groups' do
+          RSpec.shared_examples "shared group" do
+            let(:foo) { 17 }
+          end
+          RSpec.configuration.include_context "shared group"
+
+          expect(RSpec.describe.new.foo).to eq 17
+        end
+      end
+
+      context "with metadata filters" do
+        it 'includes the named shared example group in matching groups' do
+          RSpec.shared_examples "shared group" do
+            let(:foo) { 18 }
+          end
+          RSpec.configuration.include_context "shared group", :include_it
+
+          expect(RSpec.describe.new).not_to respond_to(:foo)
+          expect(RSpec.describe("", :include_it).new.foo).to eq 18
+        end
+
+        it 'includes the named shared example group in the singleton class of matching examples' do
+          RSpec.shared_examples "shared group" do
+            let(:foo) { 19 }
+          end
+          RSpec.configuration.include_context "shared group", :include_it
+
+          foo_value = nil
+          describe_successfully do
+            it { expect { self.foo }.to raise_error(NoMethodError) }
+            it("", :include_it) { foo_value = foo }
+          end
+
+          expect(foo_value).to eq 19
+        end
+      end
     end
 
     describe "#include" do
-
       module InstanceLevelMethods
         def you_call_this_a_blt?
           "egad man, where's the mayo?!?!?"
@@ -623,7 +1044,7 @@ module RSpec::Core
       it_behaves_like "metadata hash builder" do
         def metadata_hash(*args)
           config.include(InstanceLevelMethods, *args)
-          config.include_or_extend_modules.last.last
+          config.instance_variable_get(:@include_modules).items_and_filters.last.last
         end
       end
 
@@ -633,7 +1054,18 @@ module RSpec::Core
             c.include(InstanceLevelMethods)
           end
 
-          group = ExampleGroup.describe('does like, stuff and junk', :magic_key => :include) { }
+          group = RSpec.describe('does like, stuff and junk', :magic_key => :include) { }
+          expect(group).not_to respond_to(:you_call_this_a_blt?)
+          expect(group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
+        end
+
+        it "includes the given module into each existing example group" do
+          group = RSpec.describe('does like, stuff and junk', :magic_key => :include) { }
+
+          RSpec.configure do |c|
+            c.include(InstanceLevelMethods)
+          end
+
           expect(group).not_to respond_to(:you_call_this_a_blt?)
           expect(group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
         end
@@ -645,16 +1077,96 @@ module RSpec::Core
             c.include(InstanceLevelMethods, :magic_key => :include)
           end
 
-          group = ExampleGroup.describe('does like, stuff and junk', :magic_key => :include) { }
+          group = RSpec.describe('does like, stuff and junk', :magic_key => :include) { }
           expect(group).not_to respond_to(:you_call_this_a_blt?)
           expect(group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
         end
-      end
 
+        it "includes the given module into each existing matching example group" do
+          matching_group = RSpec.describe('does like, stuff and junk', :magic_key => :include) { }
+          non_matching_group = RSpec.describe
+          nested_matching_group = non_matching_group.describe("", :magic_key => :include)
+
+          RSpec.configure do |c|
+            c.include(InstanceLevelMethods, :magic_key => :include)
+          end
+
+          expect(matching_group).not_to respond_to(:you_call_this_a_blt?)
+          expect(matching_group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
+
+          expect(non_matching_group).not_to respond_to(:you_call_this_a_blt?)
+          expect(non_matching_group.new).not_to respond_to(:you_call_this_a_blt?)
+
+          expect(nested_matching_group).not_to respond_to(:you_call_this_a_blt?)
+          expect(nested_matching_group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
+        end
+
+        it "includes the given module into the singleton class of matching examples" do
+          RSpec.configure do |c|
+            c.include(InstanceLevelMethods, :magic_key => :include)
+          end
+
+          value = ex1 = ex2 = nil
+
+          RSpec.describe("Group") do
+            ex1 = example("ex", :magic_key => :include) do
+              value = you_call_this_a_blt?
+            end
+
+            ex2 = example("ex") { you_call_this_a_blt? }
+          end.run
+
+          expect(ex1.execution_result.exception).to be_nil
+          expect(value).to match(/egad/)
+          expect(ex2.execution_result.exception).to be_a(NameError)
+        end
+
+        it "ensures that `before` hooks have access to the module methods, even when only included in the singleton class of one example" do
+          RSpec.configure do |c|
+            c.include(Module.new { def which_mod; :mod_1; end }, :mod_1)
+            c.include(Module.new { def which_mod; :mod_2; end }, :mod_2)
+          end
+
+          ex1_value = ex2_value = ex3 = nil
+
+          RSpec.describe("group") do
+            before { @value = which_mod }
+            example("ex", :mod_1) { ex1_value = @value }
+            example("ex", :mod_2) { ex2_value = @value }
+            ex3 = example("ex") { }
+          end.run
+
+          expect(ex1_value).to eq(:mod_1)
+          expect(ex2_value).to eq(:mod_2)
+          expect(ex3.execution_result.exception).to be_a(NameError)
+        end
+
+        it "does not include the module in an example's singleton class when it has already been included in the group" do
+          mod = Module.new do
+            def self.inclusions
+              @inclusions ||= []
+            end
+
+            def self.included(klass)
+              inclusions << klass
+            end
+          end
+
+          RSpec.configure do |c|
+            c.include mod, :magic_key
+          end
+
+          group = RSpec.describe("Group", :magic_key) do
+            example("ex", :magic_key) { }
+          end
+
+          group.run
+          expect(mod.inclusions).to eq([group])
+        end
+      end
     end
 
     describe "#extend" do
-
       module ThatThingISentYou
         def that_thing
         end
@@ -663,7 +1175,7 @@ module RSpec::Core
       it_behaves_like "metadata hash builder" do
         def metadata_hash(*args)
           config.extend(ThatThingISentYou, *args)
-          config.include_or_extend_modules.last.last
+          config.instance_variable_get(:@extend_modules).items_and_filters.last.last
         end
       end
 
@@ -672,140 +1184,211 @@ module RSpec::Core
           c.extend(ThatThingISentYou, :magic_key => :extend)
         end
 
-        group = ExampleGroup.describe(ThatThingISentYou, :magic_key => :extend) { }
+        group = RSpec.describe(ThatThingISentYou, :magic_key => :extend) { }
         expect(group).to respond_to(:that_thing)
       end
 
+      it "extends the given module into each existing matching example group" do
+        matching_group = RSpec.describe(ThatThingISentYou, :magic_key => :extend) { }
+        non_matching_group = RSpec.describe
+        nested_matching_group = non_matching_group.describe("Other", :magic_key => :extend)
+
+        RSpec.configure do |c|
+          c.extend(ThatThingISentYou, :magic_key => :extend)
+        end
+
+        expect(matching_group).to respond_to(:that_thing)
+        expect(non_matching_group).not_to respond_to(:that_thing)
+        expect(nested_matching_group).to respond_to(:that_thing)
+      end
     end
 
-    describe "#run_all_when_everything_filtered?" do
-
-      it "defaults to false" do
-        expect(config.run_all_when_everything_filtered?).to be_falsey
+    describe "#prepend" do
+      module SomeRandomMod
+        def foo
+          "foobar"
+        end
       end
 
-      it "can be queried with question method" do
-        config.run_all_when_everything_filtered = true
-        expect(config.run_all_when_everything_filtered?).to be_truthy
+      it_behaves_like "metadata hash builder" do
+        def metadata_hash(*args)
+          config.prepend(SomeRandomMod, *args)
+          config.instance_variable_get(:@prepend_modules).items_and_filters.last.last
+        end
       end
+
+      context "with no filter" do
+        it "prepends the given module into each example group" do
+          RSpec.configure do |c|
+            c.prepend(SomeRandomMod)
+          end
+
+          group = RSpec.describe('yo') { }
+          expect(group.new.foo).to eq("foobar")
+        end
+
+        it "prepends the given module into each existing example group" do
+          group = RSpec.describe('yo') { }
+
+          RSpec.configure do |c|
+            c.prepend(SomeRandomMod)
+          end
+
+          expect(group.new.foo).to eq("foobar")
+        end
+      end
+
+      context "with a filter" do
+        it "prepends the given module into each matching example group" do
+          RSpec.configure do |c|
+            c.prepend(SomeRandomMod, :magic_key => :include)
+          end
+
+          group = RSpec.describe('yo', :magic_key => :include) { }
+          expect(group.new.foo).to eq("foobar")
+        end
+
+        it "prepends the given module into each existing matching example group" do
+          matching_group = RSpec.describe('yo', :magic_key => :include) { }
+          non_matching_group = RSpec.describe
+          nested_matching_group = non_matching_group.describe('', :magic_key => :include)
+
+          RSpec.configure do |c|
+            c.prepend(SomeRandomMod, :magic_key => :include)
+          end
+
+          expect(matching_group.new.foo).to eq("foobar")
+          expect(non_matching_group.new).not_to respond_to(:foo)
+          expect(nested_matching_group.new.foo).to eq("foobar")
+        end
+      end
+
     end
 
-    %w[color color_enabled].each do |color_option|
-      describe "##{color_option}=" do
-        context "given true" do
-          before { config.send "#{color_option}=", true }
+    describe "#color_enabled?" do
+      it "allows overriding instance output stream with an argument" do
+        config.output_stream = StringIO.new
+        output_override = StringIO.new
 
-          context "with config.tty? and output.tty?" do
-            it "does not set color_enabled" do
-              output = StringIO.new
-              config.output_stream = output
+        allow(config.output_stream).to receive_messages(:tty? => false)
+        allow(output_override).to receive_messages(:tty? => true)
 
-              config.tty = true
-              allow(config.output_stream).to receive_messages :tty? => true
+        expect(config.color_enabled?).to be false
+        expect(config.color_enabled?(output_override)).to be true
+      end
 
-              expect(config.send(color_option)).to be_truthy
-              expect(config.send(color_option, output)).to be_truthy
-            end
+      context "with color_mode :automatic" do
+        before { config.color_mode = :automatic }
+
+        context "with output.tty?" do
+          it "sets color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => true)
+            expect(config.color_enabled?).to be true
           end
+        end
 
-          context "with config.tty? and !output.tty?" do
-            it "sets color_enabled" do
-              output = StringIO.new
-              config.output_stream = output
-
-              config.tty = true
-              allow(config.output_stream).to receive_messages :tty? => false
-
-              expect(config.send(color_option)).to be_truthy
-              expect(config.send(color_option, output)).to be_truthy
-            end
-          end
-
-          context "with config.tty? and !output.tty?" do
-            it "does not set color_enabled" do
-              output = StringIO.new
-              config.output_stream = output
-
-              config.tty = false
-              allow(config.output_stream).to receive_messages :tty? => true
-
-              expect(config.send(color_option)).to be_truthy
-              expect(config.send(color_option, output)).to be_truthy
-            end
-          end
-
-          context "with !config.tty? and !output.tty?" do
-            it "does not set color_enabled" do
-              output = StringIO.new
-              config.output_stream = output
-
-              config.tty = false
-              allow(config.output_stream).to receive_messages :tty? => false
-
-              expect(config.send(color_option)).to be_falsey
-              expect(config.send(color_option, output)).to be_falsey
-            end
-          end
-
-          context "on windows" do
-            before do
-              @original_host  = RbConfig::CONFIG['host_os']
-              RbConfig::CONFIG['host_os'] = 'mingw'
-              allow(config).to receive(:require)
-            end
-
-            after do
-              RbConfig::CONFIG['host_os'] = @original_host
-            end
-
-            context "with ANSICON available" do
-              around(:each) { |e| with_env_vars('ANSICON' => 'ANSICON', &e) }
-
-              it "enables colors" do
-                config.output_stream = StringIO.new
-                allow(config.output_stream).to receive_messages :tty? => true
-                config.send "#{color_option}=", true
-                expect(config.send(color_option)).to be_truthy
-              end
-
-              it "leaves output stream intact" do
-                config.output_stream = $stdout
-                allow(config).to receive(:require) do |what|
-                  config.output_stream = 'foo' if what =~ /Win32/
-                end
-                config.send "#{color_option}=", true
-                expect(config.output_stream).to eq($stdout)
-              end
-            end
-
-            context "with ANSICON NOT available" do
-              before do
-                allow_warning
-              end
-
-              it "warns to install ANSICON" do
-                allow(config).to receive(:require) { raise LoadError }
-                expect_warning_with_call_site(__FILE__, __LINE__ + 1, /You must use ANSICON/)
-                config.send "#{color_option}=", true
-              end
-
-              it "sets color_enabled to false" do
-                allow(config).to receive(:require) { raise LoadError }
-                config.send "#{color_option}=", true
-                config.color_enabled = true
-                expect(config.send(color_option)).to be_falsey
-              end
-            end
+        context "with !output.tty?" do
+          it "sets !color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => false)
+            expect(config.color_enabled?).to be false
           end
         end
       end
 
+      context "with color_mode :on" do
+        before { config.color_mode = :on }
+
+        context "with output.tty?" do
+          it "sets color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => true)
+            expect(config.color_enabled?).to be true
+          end
+        end
+
+        context "with !output.tty?" do
+          it "sets color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => false)
+            expect(config.color_enabled?).to be true
+          end
+        end
+      end
+
+      context "with color_mode :off" do
+        before { config.color_mode = :off }
+
+        context "with output.tty?" do
+          it "sets !color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => true)
+            expect(config.color_enabled?).to be false
+          end
+        end
+
+        context "with !output.tty?" do
+          it "sets !color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => false)
+            expect(config.color_enabled?).to be false
+          end
+        end
+      end
+    end
+
+    describe '#color_mode' do
       it "prefers incoming cli_args" do
         config.output_stream = StringIO.new
-        allow(config.output_stream).to receive_messages :tty? => true
-        config.force :color => true
-        config.color = false
-        expect(config.color).to be_truthy
+        config.force :color_mode => :on
+        config.color_mode = :off
+        expect(config.color_mode).to be :on
+      end
+    end
+
+    describe "#bisect_runner_class" do
+      if RSpec::Support::RubyFeatures.fork_supported?
+        it 'defaults to the faster `Bisect::ForkRunner` since fork is supported on this platform' do
+          expect(config.bisect_runner_class).to be Bisect::ForkRunner
+        end
+      else
+        it 'defaults to the slower `Bisect::ShellRunner` since fork is not supported on this platform' do
+          expect(config.bisect_runner_class).to be Bisect::ShellRunner
+        end
+      end
+
+      it "returns `Bisect::ForkRunner` when `bisect_runner == :fork" do
+        config.bisect_runner = :fork
+        expect(config.bisect_runner_class).to be Bisect::ForkRunner
+      end
+
+      it "returns `Bisect::ShellRunner` when `bisect_runner == :shell" do
+        config.bisect_runner = :shell
+        expect(config.bisect_runner_class).to be Bisect::ShellRunner
+      end
+
+      it "raises a clear error when `bisect_runner` is configured to an unrecognized value" do
+        config.bisect_runner = :unknown
+        expect {
+          config.bisect_runner_class
+        }.to raise_error(/Unsupported value for `bisect_runner`/)
+      end
+
+      it 'cannot be changed after the runner is in use' do
+        config.bisect_runner = :fork
+        config.bisect_runner_class
+
+        expect {
+          config.bisect_runner = :shell
+        }.to raise_error(/config.bisect_runner = :shell/)
+      end
+
+      it 'can be set to the same value after the runner is in use' do
+        config.bisect_runner = :shell
+        config.bisect_runner_class
+
+        expect { config.bisect_runner = :shell }.not_to raise_error
       end
     end
 
@@ -818,30 +1401,136 @@ module RSpec::Core
       end
     end
 
+    describe "#formatters" do
+      it "returns a dup of the formatter_loader formatters" do
+        config.add_formatter 'doc'
+        config.formatters.clear
+        expect(config.formatters).to_not eq []
+      end
+    end
+
+    describe '#reporter' do
+      before do
+        config.output_stream = StringIO.new
+        config.deprecation_stream = StringIO.new
+      end
+
+      it 'does not immediately trigger formatter setup' do
+        config.reporter
+
+        expect(config.formatters).to be_empty
+      end
+
+      it 'buffers deprecations until the reporter is ready' do
+        allow(config.formatter_loader).to receive(:prepare_default).and_wrap_original do |original, *args|
+          config.reporter.deprecation :message => 'Test deprecation'
+          original.call(*args)
+        end
+        expect {
+          config.reporter.notify :deprecation_summary, Notifications::NullNotification
+        }.to change { config.deprecation_stream.string }.to include 'Test deprecation'
+      end
+
+      it 'allows registering listeners without doubling up formatters' do
+        config.reporter.register_listener double(:message => nil), :message
+
+        expect {
+          config.formatter = :documentation
+        }.to change { config.formatters.size }.from(0).to(1)
+
+        # notify triggers the formatter setup, there are two due to the already configured
+        # documentation formatter and deprecation formatter
+        expect {
+          config.reporter.notify :message, double(:message => 'Triggers formatter setup')
+        }.to change { config.formatters.size }.from(1).to(2)
+      end
+
+      it 'still configures a default formatter when none specified' do
+        config.reporter.register_listener double(:message => nil), :message
+
+        # notify triggers the formatter setup, there are two due to the default
+        # (progress) and deprecation formatter
+        expect {
+          config.reporter.notify :message, double(:message => 'Triggers formatter setup')
+        }.to change { config.formatters.size }.from(0).to(2)
+      end
+    end
+
+    describe "#default_formatter" do
+      it 'defaults to `progress`' do
+        expect(config.default_formatter).to eq('progress')
+      end
+
+      it 'remembers changes' do
+        config.default_formatter = 'doc'
+        expect(config.default_formatter).to eq('doc')
+      end
+
+      context 'when another formatter has been set' do
+        it 'does not get used' do
+          config.default_formatter = 'doc'
+          config.add_formatter 'progress'
+
+          expect(used_formatters).to include(an_instance_of Formatters::ProgressFormatter)
+          expect(used_formatters).not_to include(an_instance_of Formatters::DocumentationFormatter)
+        end
+      end
+
+      context 'when no other formatter has been set' do
+        before do
+          config.output_stream = StringIO.new
+        end
+
+        it 'gets used' do
+          config.default_formatter = 'doc'
+          config.reporter.notify :message, double(:message => 'Triggers formatter setup')
+
+          expect(used_formatters).not_to include(an_instance_of Formatters::ProgressFormatter)
+          expect(used_formatters).to include(an_instance_of Formatters::DocumentationFormatter)
+        end
+      end
+
+      context 'using a legacy formatter as default' do
+        # Generating warnings during formatter initialisation triggers the
+        # ProxyReporter code path.
+        it 'remembers changes' do
+          legacy_formatter = Class.new
+
+          configuration = RSpec.configuration
+          configuration.default_formatter = legacy_formatter
+          configuration.reporter
+          expect(configuration.default_formatter).to eq(legacy_formatter)
+        end
+      end
+
+      def used_formatters
+        config.reporter # to force freezing of formatters
+        config.formatters
+      end
+    end
+
     describe "#filter_run_including" do
       it_behaves_like "metadata hash builder" do
         def metadata_hash(*args)
           config.filter_run_including(*args)
-          config.inclusion_filter
+          config.inclusion_filter.rules
         end
       end
 
       it "sets the filter with a hash" do
         config.filter_run_including :foo => true
-        expect(config.inclusion_filter[:foo]).to be(true)
+        expect(inclusion_filter).to eq( {:foo => true} )
       end
 
       it "sets the filter with a symbol" do
         config.filter_run_including :foo
-        expect(config.inclusion_filter[:foo]).to be(true)
+        expect(inclusion_filter).to eq( {:foo => true} )
       end
 
       it "merges with existing filters" do
         config.filter_run_including :foo => true
         config.filter_run_including :bar => false
-
-        expect(config.inclusion_filter[:foo]).to be(true)
-        expect(config.inclusion_filter[:bar]).to be(false)
+        expect(inclusion_filter).to eq( {:foo => true, :bar => false} )
       end
     end
 
@@ -849,133 +1538,50 @@ module RSpec::Core
       it_behaves_like "metadata hash builder" do
         def metadata_hash(*args)
           config.filter_run_excluding(*args)
-          config.exclusion_filter
+          config.exclusion_filter.rules
         end
       end
 
       it "sets the filter" do
         config.filter_run_excluding :foo => true
-        expect(config.exclusion_filter[:foo]).to be(true)
+        expect(exclusion_filter).to eq( {:foo => true} )
       end
 
       it "sets the filter using a symbol" do
         config.filter_run_excluding :foo
-        expect(config.exclusion_filter[:foo]).to be(true)
+        expect(exclusion_filter).to eq( {:foo => true} )
       end
 
       it "merges with existing filters" do
         config.filter_run_excluding :foo => true
         config.filter_run_excluding :bar => false
-
-        expect(config.exclusion_filter[:foo]).to be(true)
-        expect(config.exclusion_filter[:bar]).to be(false)
+        expect(exclusion_filter).to eq( {:foo => true, :bar => false} )
       end
     end
 
-    describe "#inclusion_filter" do
-      it "returns {} even if set to nil" do
-        config.inclusion_filter = nil
-        expect(config.inclusion_filter).to eq({})
-      end
-    end
-
-    describe "#inclusion_filter=" do
-      it "treats symbols as hash keys with true values when told to" do
-        config.inclusion_filter = :foo
-        expect(config.inclusion_filter).to eq({:foo => true})
-      end
-
-      it "overrides any inclusion filters set on the command line or in configuration files" do
-        config.force(:inclusion_filter => { :foo => :bar })
-        config.inclusion_filter = {:want => :this}
-        expect(config.inclusion_filter).to eq({:want => :this})
-      end
-    end
-
-    describe "#exclusion_filter" do
-      it "returns {} even if set to nil" do
-        config.exclusion_filter = nil
-        expect(config.exclusion_filter).to eq({})
-      end
-
-      describe "the default :if filter" do
-        it "does not exclude a spec with  { :if => true } metadata" do
-          expect(config.exclusion_filter[:if].call(true)).to be_falsey
-        end
-
-        it "excludes a spec with  { :if => false } metadata" do
-          expect(config.exclusion_filter[:if].call(false)).to be_truthy
-        end
-
-        it "excludes a spec with  { :if => nil } metadata" do
-          expect(config.exclusion_filter[:if].call(nil)).to be_truthy
+    shared_examples_for "a spec filter" do |type|
+      describe "##{type}" do
+        it "returns {} even if set to nil" do
+          config.send("#{type}=", nil)
+          expect(send(type)).to eq({})
         end
       end
 
-      describe "the default :unless filter" do
-        it "excludes a spec with  { :unless => true } metadata" do
-          expect(config.exclusion_filter[:unless].call(true)).to be_truthy
+      describe "##{type}=" do
+        it "treats symbols as hash keys with true values when told to" do
+          config.send("#{type}=", :foo)
+          expect(send(type)).to eq( {:foo => true} )
         end
 
-        it "does not exclude a spec with { :unless => false } metadata" do
-          expect(config.exclusion_filter[:unless].call(false)).to be_falsey
-        end
-
-        it "does not exclude a spec with { :unless => nil } metadata" do
-          expect(config.exclusion_filter[:unless].call(nil)).to be_falsey
+        it "overrides any #{type} set on the command line or in configuration files" do
+          config.force(type => { :foo => :bar })
+          config.send("#{type}=", {:want => :this})
+          expect(send(type)).to eq( {:want => :this} )
         end
       end
     end
-
-    describe "#treat_symbols_as_metadata_keys_with_true_values=" do
-      it 'is deprecated' do
-        expect_deprecation_with_call_site(__FILE__, __LINE__ + 1)
-        config.treat_symbols_as_metadata_keys_with_true_values = true
-      end
-    end
-
-    describe "#exclusion_filter=" do
-      it "treats symbols as hash keys with true values when told to" do
-        config.exclusion_filter = :foo
-        expect(config.exclusion_filter).to eq({:foo => true})
-      end
-
-      it "overrides any exclusion filters set on the command line or in configuration files" do
-        config.force(:exclusion_filter => { :foo => :bar })
-        config.exclusion_filter = {:want => :this}
-        expect(config.exclusion_filter).to eq({:want => :this})
-      end
-    end
-
-    describe "line_numbers=" do
-      it "sets the line numbers" do
-        config.line_numbers = ['37']
-        expect(config.filter).to eq({:line_numbers => [37]})
-      end
-
-      it "overrides filters" do
-        config.filter_run :focused => true
-        config.line_numbers = ['37']
-        expect(config.filter).to eq({:line_numbers => [37]})
-      end
-
-      it "prevents subsequent filters" do
-        config.line_numbers = ['37']
-        config.filter_run :focused => true
-        expect(config.filter).to eq({:line_numbers => [37]})
-      end
-    end
-
-    describe "line_numbers" do
-      it "returns the line numbers from the filter" do
-        config.line_numbers = ['42']
-        expect(config.line_numbers).to eq [42]
-      end
-
-      it "defaults to empty" do
-        expect(config.line_numbers).to eq []
-      end
-    end
+    it_behaves_like "a spec filter", :inclusion_filter
+    it_behaves_like "a spec filter", :exclusion_filter
 
     describe "#full_backtrace=" do
       it "doesn't impact other instances of config" do
@@ -983,15 +1589,14 @@ module RSpec::Core
         config_2 = Configuration.new
 
         config_1.full_backtrace = true
-        expect(config_2.full_backtrace?).to be_falsey
+        expect(config_2.full_backtrace?).to be(false)
       end
     end
 
     describe "#backtrace_exclusion_patterns=" do
       it "actually receives the new filter values" do
-        config = Configuration.new
         config.backtrace_exclusion_patterns = [/.*/]
-        expect(config.backtrace_formatter.exclude? "this").to be_truthy
+        expect(config.backtrace_formatter.exclude? "this").to be(true)
       end
     end
 
@@ -1009,15 +1614,58 @@ module RSpec::Core
 
     describe "#backtrace_exclusion_patterns" do
       it "can be appended to" do
-        config = Configuration.new
         config.backtrace_exclusion_patterns << /.*/
-        expect(config.backtrace_formatter.exclude? "this").to be_truthy
+        expect(config.backtrace_formatter.exclude? "this").to be(true)
+      end
+    end
+
+    describe "#backtrace_inclusion_patterns" do
+      before { config.backtrace_exclusion_patterns << /.*/ }
+
+      it 'can be assigned to' do
+        config.backtrace_inclusion_patterns = [/foo/]
+        expect(config.backtrace_formatter.exclude?("food")).to be false
+      end
+
+      it 'can be appended to' do
+        config.backtrace_inclusion_patterns << /foo/
+        expect(config.backtrace_formatter.exclude?("food")).to be false
+      end
+    end
+
+    describe "#filter_gems_from_backtrace" do
+      def exclude?(line)
+        config.backtrace_formatter.exclude?(line)
+      end
+
+      it 'filters the named gems from the backtrace' do
+        line_1 = "/Users/myron/.gem/ruby/2.1.1/gems/foo-1.6.3.1/foo.rb:13"
+        line_2 = "/Users/myron/.gem/ruby/2.1.1/gems/bar-1.6.3.1/bar.rb:13"
+
+        expect {
+          config.filter_gems_from_backtrace "foo", "bar"
+        }.to change { exclude?(line_1) }.from(false).to(true).
+         and change { exclude?(line_2) }.from(false).to(true)
+      end
+    end
+
+    describe "#profile_examples" do
+      it "defaults to false" do
+        expect(config.profile_examples).to be false
+      end
+
+      it "can be set to an integer value" do
+        config.profile_examples = 17
+        expect(config.profile_examples).to eq(17)
+      end
+
+      it "returns 10 when set simply enabled" do
+        config.profile_examples = true
+        expect(config.profile_examples).to eq(10)
       end
     end
 
     describe "#libs=" do
-      include_context "isolate load path mutation"
-
       it "adds directories to the LOAD_PATH" do
         expect($LOAD_PATH).to receive(:unshift).with("a/dir")
         config.libs = ["a/dir"]
@@ -1025,11 +1673,335 @@ module RSpec::Core
     end
 
     describe "libs" do
-      include_context "isolate load path mutation"
-
       it 'records paths added to the load path' do
         config.libs = ["a/dir"]
         expect(config.libs).to eq ["a/dir"]
+      end
+    end
+
+    describe "#define_derived_metadata" do
+      it 'allows the provided block to mutate example group metadata' do
+        RSpec.configuration.define_derived_metadata do |metadata|
+          metadata[:reverse_description] = metadata[:description].reverse
+        end
+
+        group = RSpec.describe("My group")
+        expect(group.metadata).to include(:description => "My group", :reverse_description => "puorg yM")
+      end
+
+      it 'allows the provided block to mutate example metadata' do
+        RSpec.configuration.define_derived_metadata do |metadata|
+          metadata[:reverse_description] = metadata[:description].reverse
+        end
+
+        ex = RSpec.describe("My group").example("foo")
+        expect(ex.metadata).to include(:description => "foo", :reverse_description => "oof")
+      end
+
+      it 'allows multiple configured blocks to be applied, in order of definition' do
+        RSpec.configure do |c|
+          c.define_derived_metadata { |m| m[:b1_desc] = m[:description] + " (block 1)" }
+          c.define_derived_metadata { |m| m[:b2_desc] = m[:b1_desc]     + " (block 2)" }
+        end
+
+        group = RSpec.describe("bar")
+        expect(group.metadata).to include(:b1_desc => "bar (block 1)", :b2_desc => "bar (block 1) (block 2)")
+      end
+
+      it 'supports cascades of derived metadata, but avoids re-running derived metadata blocks that have already been applied' do
+        RSpec.configure do |c|
+          c.define_derived_metadata(:foo1) { |m| m[:foo2] = (m[:foo2] || 0) + 1 }
+          c.define_derived_metadata(:foo2) { |m| m[:foo3] = (m[:foo3] || 0) + 1 }
+          c.define_derived_metadata(:foo3) { |m| m[:foo1] += 1 }
+        end
+
+        group = RSpec.describe("bar", :foo1 => 0)
+        expect(group.metadata).to include(:foo1 => 1, :foo2 => 1, :foo3 => 1)
+
+        ex = RSpec.describe("My group").example("foo", :foo1 => 0)
+        expect(ex.metadata).to include(:foo1 => 1, :foo2 => 1, :foo3 => 1)
+      end
+
+      it 'does not allow a derived metadata cascade to recurse infinitely' do
+        RSpec.configure do |c|
+          counter = 1
+          derive_next_metadata = lambda do |outer_meta|
+            tag = :"foo#{counter += 1}"
+            outer_meta[tag] = true
+
+            c.define_derived_metadata(tag) do |inner_meta|
+              derive_next_metadata.call(inner_meta)
+            end
+          end
+
+          c.define_derived_metadata(:foo1) do |meta|
+            derive_next_metadata.call(meta)
+          end
+        end
+
+        expect {
+          RSpec.describe("group", :foo1)
+        }.to raise_error(SystemStackError)
+      end
+
+      it "derives metadata before the group or example blocks are eval'd so their logic can depend on the derived metadata" do
+        RSpec.configure do |c|
+          c.define_derived_metadata(:foo) do |metadata|
+            metadata[:bar] = "bar"
+          end
+        end
+
+        group_bar_value = example_bar_value = nil
+
+        RSpec.describe "Group", :foo do
+          group_bar_value = self.metadata[:bar]
+          example_bar_value = example("ex", :foo).metadata[:bar]
+        end
+
+        expect(group_bar_value).to eq("bar")
+        expect(example_bar_value).to eq("bar")
+      end
+
+      it 'registers top-level groups before invoking the callback so the logic can configure already registered groups' do
+        registered_groups = nil
+
+        RSpec.configuration.define_derived_metadata do |_meta|
+          registered_groups = RSpec.world.example_groups
+        end
+
+        group = RSpec.describe("My group") do
+        end
+
+        expect(registered_groups).to eq [group]
+      end
+
+      it 'registers nested groups before invoking the callback so the logic can configure already registered groups' do
+        registered_groups = nil
+
+        RSpec.configuration.define_derived_metadata(:inner) do |_meta|
+          registered_groups = RSpec.world.all_example_groups
+        end
+
+        inner = nil
+        outer = RSpec.describe("Outer") do
+          inner = context "Inner", :inner do
+          end
+        end
+
+        expect(registered_groups).to contain_exactly(outer, inner)
+      end
+
+      it 'registers examples before invoking the callback so the logic can configure already registered groups' do
+        registered_examples = nil
+
+        RSpec.configuration.define_derived_metadata(:ex) do |_meta|
+          registered_examples = RSpec.world.all_example_groups.flat_map(&:examples)
+        end
+
+        example = nil
+        RSpec.describe("Outer") do
+          example = example("ex", :ex)
+        end
+
+        expect(registered_examples).to contain_exactly(example)
+      end
+
+      context "when passed a metadata filter" do
+        it 'only applies to the groups and examples that match that filter' do
+          RSpec.configure do |c|
+            c.define_derived_metadata(:apply => true) do |metadata|
+              metadata[:reverse_description] = metadata[:description].reverse
+            end
+          end
+
+          g1 = RSpec.describe("G1", :apply)
+          g2 = RSpec.describe("G2")
+          e1 = g1.example("E1")
+          e2 = g2.example("E2", :apply)
+          e3 = g2.example("E3")
+
+          expect(g1.metadata).to include(:reverse_description => "1G")
+          expect(g2.metadata).not_to include(:reverse_description)
+
+          expect(e1.metadata).to include(:reverse_description => "1E")
+          expect(e2.metadata).to include(:reverse_description => "2E")
+          expect(e3.metadata).not_to include(:reverse_description)
+        end
+
+        it 'applies if all of multiple filters apply (to align with module inclusion semantics)' do
+          RSpec.configure do |c|
+            c.define_derived_metadata(:a => 1, :b => 2) do |metadata|
+              metadata[:reverse_description] = metadata[:description].reverse
+            end
+          end
+
+          g1 = RSpec.describe("G1", :a => 1, :b => 2)
+          g2 = RSpec.describe("G2", :b => 2)
+
+          expect(g1.metadata).to include(:reverse_description => "1G")
+          expect(g2.metadata).not_to include(:reverse_description)
+        end
+
+        it 'allows a metadata filter to be passed as a raw symbol' do
+          RSpec.configure do |c|
+            c.define_derived_metadata(:apply) do |metadata|
+              metadata[:reverse_description] = metadata[:description].reverse
+            end
+          end
+
+          g1 = RSpec.describe("G1", :apply)
+          g2 = RSpec.describe("G2")
+
+          expect(g1.metadata).to include(:reverse_description => "1G")
+          expect(g2.metadata).not_to include(:reverse_description)
+        end
+      end
+    end
+
+    describe "#when_first_matching_example_defined" do
+      it "runs the block when the first matching example is defined" do
+        sequence = []
+        RSpec.configuration.when_first_matching_example_defined(:foo) do
+          sequence << :callback
+        end
+
+        RSpec.describe do
+          example("ex 1")
+          sequence << :before_first_matching_example_defined
+          example("ex 2", :foo)
+          sequence << :after_first_matching_example_defined
+        end
+
+        expect(sequence).to eq [:before_first_matching_example_defined, :callback, :after_first_matching_example_defined]
+      end
+
+      it "does not fire when later matching examples are defined" do
+        sequence = []
+        RSpec.configuration.when_first_matching_example_defined(:foo) do
+          sequence << :callback
+        end
+
+        RSpec.describe do
+          example("ex 1", :foo)
+          sequence.clear
+
+          sequence << :before_second_matching_example_defined
+          example("ex 2", :foo)
+          sequence << :after_second_matching_example_defined
+        end
+
+        expect(sequence).to eq [:before_second_matching_example_defined, :after_second_matching_example_defined]
+      end
+
+      it "does not run the block if no matching examples are defined" do
+        sequence = []
+        RSpec.configuration.when_first_matching_example_defined(:foo) do
+          sequence << :callback
+        end
+
+        RSpec.describe do
+          example("ex 1")
+          example("ex 2", :bar)
+        end
+
+        expect(sequence).to eq []
+      end
+
+      it 'does not run the block if groups match the metadata but no examples do' do
+        called = false
+        RSpec.configuration.when_first_matching_example_defined(:foo => true) do
+          called = true
+        end
+
+        RSpec.describe "group 1", :foo => true do
+        end
+
+        RSpec.describe "group 2", :foo => true do
+          example("ex", :foo => false)
+        end
+
+        expect(called).to be false
+      end
+
+      it "still runs after the first matching example even if there is a group that matches earlier" do
+        sequence = []
+        RSpec.configuration.when_first_matching_example_defined(:foo) do
+          sequence << :callback
+        end
+
+        RSpec.describe "group", :foo do
+        end
+
+        RSpec.describe do
+          example("ex 1")
+          sequence << :before_first_matching_example_defined
+          example("ex 2", :foo)
+          sequence << :after_first_matching_example_defined
+        end
+
+        expect(sequence).to eq [:before_first_matching_example_defined, :callback, :after_first_matching_example_defined]
+      end
+
+      context "when a group is defined with matching metadata" do
+        it "runs the callback after the first example in the group is defined" do
+          sequence = []
+          RSpec.configuration.when_first_matching_example_defined(:foo) do
+            sequence << :callback
+          end
+
+          sequence << :before_group
+          RSpec.describe "group", :foo do
+            sequence << :before_example
+            example("ex")
+            sequence << :after_example
+          end
+
+          expect(sequence).to eq [:before_group, :before_example, :callback, :after_example]
+        end
+      end
+
+      context 'when the value of the registered metadata is a Proc' do
+        it 'does not fire when later matching examples are defined' do
+          sequence = []
+          RSpec.configuration.when_first_matching_example_defined(:foo => proc { true }) do
+            sequence << :callback
+          end
+
+          RSpec.describe do
+            example("ex 1", :foo)
+            sequence.clear
+
+            sequence << :before_second_matching_example_defined
+            example("ex 2", :foo)
+            sequence << :after_second_matching_example_defined
+          end
+
+          expect(sequence).to eq [:before_second_matching_example_defined, :after_second_matching_example_defined]
+        end
+      end
+
+      context 'when a matching example group with other registered metadata has been defined' do
+        it 'does not fire when later matching examples with the other metadata are defined' do
+          sequence = []
+
+          RSpec.configuration.when_first_matching_example_defined(:foo) do
+            sequence << :callback
+          end
+
+          RSpec.configuration.when_first_matching_example_defined(:bar) do
+          end
+
+          RSpec.describe 'group', :foo, :bar do
+            example("ex 1", :foo)
+            sequence.clear
+
+            sequence << :before_second_matching_example_defined
+            example("ex 2", :foo, :bar)
+            sequence << :after_second_matching_example_defined
+          end
+
+          expect(sequence).to eq [:before_second_matching_example_defined, :after_second_matching_example_defined]
+        end
       end
     end
 
@@ -1045,7 +2017,7 @@ module RSpec::Core
           end
 
           it "adds a predicate" do
-            expect(config.custom_option?).to be_falsey
+            expect(config.custom_option?).to be(false)
           end
 
           it "can be overridden" do
@@ -1064,7 +2036,7 @@ module RSpec::Core
           end
 
           it "returns true for the predicate" do
-            expect(config.custom_option?).to be_truthy
+            expect(config.custom_option?).to be(true)
           end
 
           it "can be overridden with a truthy value" do
@@ -1101,7 +2073,7 @@ module RSpec::Core
 
         it "delegates the predicate to the other option" do
           config.custom_option = true
-          expect(config.another_custom_option?).to be_truthy
+          expect(config.another_custom_option?).to be(true)
         end
       end
     end
@@ -1109,64 +2081,61 @@ module RSpec::Core
     describe "#configure_group" do
       it "extends with 'extend'" do
         mod = Module.new
-        group = ExampleGroup.describe("group", :foo => :bar)
+        group = RSpec.describe("group", :foo => :bar)
 
         config.extend(mod, :foo => :bar)
         config.configure_group(group)
         expect(group).to be_a(mod)
       end
 
-      it "extends with 'module'" do
+      it "includes with 'include'" do
         mod = Module.new
-        group = ExampleGroup.describe("group", :foo => :bar)
+        group = RSpec.describe("group", :foo => :bar)
 
         config.include(mod, :foo => :bar)
         config.configure_group(group)
         expect(group.included_modules).to include(mod)
       end
 
-      it "requires only one matching filter" do
+      it "requires exact matching filter" do
         mod = Module.new
-        group = ExampleGroup.describe("group", :foo => :bar)
+        group = RSpec.describe("group", :foo => :bar, :baz => :bam)
 
         config.include(mod, :foo => :bar, :baz => :bam)
         config.configure_group(group)
         expect(group.included_modules).to include(mod)
       end
 
-      it "includes each one before deciding whether to include the next" do
-        mod1 = Module.new do
-          def self.included(host)
-            host.metadata[:foo] = :bar
-          end
-        end
-        mod2 = Module.new
+      it "doesn't include on incomplete matching filter" do
+        mod = Module.new
+        group = RSpec.describe("group", :foo => :bar)
 
-        group = ExampleGroup.describe("group")
-
-        config.include(mod1)
-        config.include(mod2, :foo => :bar)
+        config.include(mod, :foo => :bar, :baz => :bam)
         config.configure_group(group)
-        expect(group.included_modules).to include(mod1)
-        expect(group.included_modules).to include(mod2)
+        expect(group.included_modules).not_to include(mod)
       end
 
-      module IncludeOrExtendMeOnce
+      module IncludeExtendOrPrependMeOnce
         def self.included(host)
           raise "included again" if host.instance_methods.include?(:foobar)
-          host.class_eval { def foobar; end }
+          host.class_exec { def foobar; end }
         end
 
         def self.extended(host)
           raise "extended again" if host.respond_to?(:foobar)
           def host.foobar; end
         end
+
+        def self.prepended(host)
+          raise "prepended again" if host.instance_methods.include?(:barbaz)
+          host.class_exec { def barbaz; end }
+        end
       end
 
       it "doesn't include a module when already included in ancestor" do
-        config.include(IncludeOrExtendMeOnce, :foo => :bar)
+        config.include(IncludeExtendOrPrependMeOnce, :foo => :bar)
 
-        group = ExampleGroup.describe("group", :foo => :bar)
+        group = RSpec.describe("group", :foo => :bar)
         child = group.describe("child")
 
         config.configure_group(group)
@@ -1174,9 +2143,19 @@ module RSpec::Core
       end
 
       it "doesn't extend when ancestor is already extended with same module" do
-        config.extend(IncludeOrExtendMeOnce, :foo => :bar)
+        config.extend(IncludeExtendOrPrependMeOnce, :foo => :bar)
 
-        group = ExampleGroup.describe("group", :foo => :bar)
+        group = RSpec.describe("group", :foo => :bar)
+        child = group.describe("child")
+
+        config.configure_group(group)
+        config.configure_group(child)
+      end
+
+      it "doesn't prepend a module when already present in ancestor chain" do
+        config.prepend(IncludeExtendOrPrependMeOnce, :foo => :bar)
+
+        group = RSpec.describe("group", :foo => :bar)
         child = group.describe("child")
 
         config.configure_group(group)
@@ -1188,16 +2167,20 @@ module RSpec::Core
       after do
         RSpec::Core::DSL.example_group_aliases.delete(:my_group_method)
 
-        RSpec.module_eval do
+        RSpec.module_exec do
           class << self
             undef :my_group_method if method_defined? :my_group_method
           end
         end
 
-        RSpec::Core::ExampleGroup.module_eval do
+        RSpec::Core::ExampleGroup.module_exec do
           class << self
             undef :my_group_method if method_defined? :my_group_method
           end
+        end
+
+        Module.class_exec do
+          undef :my_group_method if method_defined? :my_group_method
         end
       end
 
@@ -1209,10 +2192,31 @@ module RSpec::Core
         end
       end
 
+      it 'overrides existing definitions of the aliased method name without issueing warnings' do
+        class << ExampleGroup
+          def my_group_method; :original; end
+        end
+
+        config.alias_example_group_to :my_group_method
+
+        expect(ExampleGroup.my_group_method).to be < ExampleGroup
+      end
+
       it "allows adding additional metadata" do
         config.alias_example_group_to :my_group_method, { :some => "thing" }
         group = ExampleGroup.my_group_method("a group", :another => "thing")
         expect(group.metadata).to include(:some => "thing", :another => "thing")
+      end
+
+      it "passes `nil` as the description arg when no args are given" do
+        config.alias_example_group_to :my_group_method, { :some => "thing" }
+        group = ExampleGroup.my_group_method
+
+        expect(group.metadata).to include(
+          :description_args => [nil],
+          :description => "",
+          :some => "thing"
+        )
       end
 
       context 'when the aliased method is used' do
@@ -1229,7 +2233,7 @@ module RSpec::Core
     describe "#alias_example_to" do
       it_behaves_like "metadata hash builder" do
         after do
-          RSpec::Core::ExampleGroup.module_eval do
+          RSpec::Core::ExampleGroup.module_exec do
             class << self
               undef :my_example_method if method_defined? :my_example_method
             end
@@ -1237,7 +2241,7 @@ module RSpec::Core
         end
         def metadata_hash(*args)
           config.alias_example_to :my_example_method, *args
-          group = ExampleGroup.describe("group")
+          group = RSpec.describe("group")
           example = group.my_example_method("description")
           example.metadata
         end
@@ -1256,20 +2260,49 @@ module RSpec::Core
         config.reset
         expect(config.formatters).to be_empty
       end
+
+      it "clears the output wrapper" do
+        config.output_stream = StringIO.new
+        config.reset
+        expect(config.instance_variable_get("@output_wrapper")).to be_nil
+      end
+    end
+
+    describe "#reset_reporter" do
+      it "clears the reporter" do
+        expect(config.reporter).not_to be_nil
+        config.reset
+        expect(config.instance_variable_get("@reporter")).to be_nil
+      end
+
+      it "clears the formatters" do
+        config.add_formatter "doc"
+        config.reset
+        expect(config.formatters).to be_empty
+      end
+
+      it "clears the output wrapper" do
+        config.output_stream = StringIO.new
+        config.reset
+        expect(config.instance_variable_get("@output_wrapper")).to be_nil
+      end
+    end
+
+    def example_numbered(num)
+      instance_double(Example, :id => "./foo_spec.rb[1:#{num}]")
     end
 
     describe "#force" do
       context "for ordering options" do
-        let(:list) { [1, 2, 3, 4] }
+        let(:list) { 1.upto(4).map { |i| example_numbered(i) } }
         let(:ordering_strategy) { config.ordering_registry.fetch(:global) }
-        let(:rng) { RSpec::Core::RandomNumberGenerator.new config.seed }
-        let(:shuffled) { Ordering::Random.new(config).shuffle list, rng }
+        let(:shuffled) { Ordering::Random.new(config).order list }
 
         specify "CLI `--order defined` takes precedence over `config.order = rand`" do
           config.force :order => "defined"
           config.order = "rand"
 
-          expect(ordering_strategy.order(list)).to eq([1, 2, 3, 4])
+          expect(ordering_strategy.order(list)).to eq(list)
         end
 
         specify "CLI `--order rand:37` takes precedence over `config.order = defined`" do
@@ -1291,18 +2324,18 @@ module RSpec::Core
         specify "CLI `--order defined` takes precedence over `config.register_ordering(:global)`" do
           config.force :order => "defined"
           config.register_ordering(:global, &:reverse)
-          expect(ordering_strategy.order(list)).to eq([1, 2, 3, 4])
+          expect(ordering_strategy.order(list)).to eq(list)
         end
       end
 
       it "forces 'false' value" do
         config.add_setting :custom_option
         config.custom_option = true
-        expect(config.custom_option?).to be_truthy
+        expect(config.custom_option?).to be(true)
         config.force :custom_option => false
-        expect(config.custom_option?).to be_falsey
+        expect(config.custom_option?).to be(false)
         config.custom_option = true
-        expect(config.custom_option?).to be_falsey
+        expect(config.custom_option?).to be(false)
       end
     end
 
@@ -1315,7 +2348,7 @@ module RSpec::Core
 
     describe "#seed_used?" do
       def use_seed_on(registry)
-        registry.fetch(:random).order([1, 2])
+        registry.fetch(:random).order([example_numbered(1), example_numbered(2)])
       end
 
       it 'returns false if neither ordering registry used the seed' do
@@ -1409,9 +2442,9 @@ module RSpec::Core
 
     describe '#warnings' do
       around do |example|
-        @_original_setting = $VERBOSE
+        original_setting = $VERBOSE
         example.run
-        $VERBOSE = @_original_setting
+        $VERBOSE = original_setting
       end
 
       it "sets verbose to true when true" do
@@ -1425,12 +2458,37 @@ module RSpec::Core
       end
 
       it 'returns the verbosity setting' do
-        expect(config.warnings).to eq $VERBOSE
+        config.warnings = true
+        expect(config.warnings?).to eq true
+
+        config.warnings = false
+        expect(config.warnings?).to eq false
       end
 
       it 'is loaded from config by #force' do
         config.force :warnings => true
         expect($VERBOSE).to eq true
+      end
+    end
+
+    describe '#raise_on_warning=(value)' do
+      around do |example|
+        original_setting = RSpec::Support.warning_notifier
+        example.run
+        RSpec::Support.warning_notifier = original_setting
+      end
+
+      it 'causes warnings to raise errors when true' do
+        config.raise_on_warning = true
+        expect {
+          RSpec.warning 'All hell breaks loose'
+        }.to raise_error a_string_including('WARNING: All hell breaks loose')
+      end
+
+      it 'causes warnings to default to warning when false' do
+        config.raise_on_warning = false
+        expect_warning_with_call_site(__FILE__, __LINE__ + 1)
+        RSpec.warning 'doesnt raise'
       end
     end
 
@@ -1456,7 +2514,7 @@ module RSpec::Core
 
         value_1 = value_2 = nil
 
-        ExampleGroup.describe "Group" do
+        RSpec.describe "Group" do
           it "works" do
             value_1 = the_example
             value_2 = another_example_helper
@@ -1466,6 +2524,64 @@ module RSpec::Core
         expect(value_1).to be_an(RSpec::Core::Example)
         expect(value_1.description).to eq("works")
         expect(value_2).to be(value_1)
+      end
+    end
+
+    describe 'recording spec start time (for measuring load)' do
+      it 'returns a time' do
+        expect(config.start_time).to be_an_instance_of ::Time
+      end
+
+      it 'is configurable' do
+        config.start_time = 42
+        expect(config.start_time).to eq 42
+      end
+    end
+
+    describe '#threadsafe', :threadsafe => true do
+      it 'defaults to false' do
+        expect(config.threadsafe).to eq true
+      end
+
+      it 'can be configured to true or false' do
+        config.threadsafe = true
+        expect(config.threadsafe).to eq true
+
+        config.threadsafe = false
+        expect(config.threadsafe).to eq false
+      end
+    end
+
+    describe '#max_displayed_failure_line_count' do
+      it 'defaults to 10' do
+        expect(config.max_displayed_failure_line_count).to eq 10
+      end
+
+      it 'is configurable' do
+        config.max_displayed_failure_line_count = 5
+        expect(config.max_displayed_failure_line_count).to eq 5
+      end
+    end
+
+    describe '#failure_exit_code' do
+      it 'defaults to 1' do
+        expect(config.failure_exit_code).to eq 1
+      end
+
+      it 'is configurable' do
+        config.failure_exit_code = 2
+        expect(config.failure_exit_code).to eq 2
+      end
+    end
+
+    describe '#error_exit_code' do
+      it 'defaults to nil' do
+        expect(config.error_exit_code).to eq nil
+      end
+
+      it 'is configurable' do
+        config.error_exit_code = 2
+        expect(config.error_exit_code).to eq 2
       end
     end
 

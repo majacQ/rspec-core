@@ -3,11 +3,13 @@ require 'rspec/mocks'
 module RSpec
   module Core
     module MockingAdapters
-      # @api private
+      # @private
       module RSpec
         include ::RSpec::Mocks::ExampleMethods
 
-        def self.framework_name; :rspec end
+        def self.framework_name
+          :rspec
+        end
 
         def self.configuration
           ::RSpec::Mocks.configuration

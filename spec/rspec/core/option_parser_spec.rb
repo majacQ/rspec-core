@@ -1,29 +1,48 @@
-require "spec_helper"
+require 'rspec/core/drb'
+require 'rspec/core/bisect/coordinator'
 
 module RSpec::Core
   RSpec.describe OptionParser do
-    let(:output_file){ mock File }
-
     before do
-      allow(RSpec).to receive(:deprecate)
-      allow(File).to receive(:open).with("foo.txt",'w') { (output_file) }
+      allow(RSpec.configuration).to receive(:reporter) do
+        fail "OptionParser is not allowed to access `config.reporter` since we want " +
+             "ConfigurationOptions to have the chance to set `deprecation_stream` " +
+             "(based on `--deprecation-out`) before the deprecation formatter is " +
+             "initialized by the reporter instantiation. If you need to issue a deprecation, " +
+             "populate an `options[:deprecations]` key and have ConfigurationOptions " +
+             "issue the deprecation after configuring `deprecation_stream`"
+      end
     end
 
-    it "does not parse empty args" do
-      parser = Parser.new
-      expect(OptionParser).not_to receive(:new)
-      parser.parse([])
+    context "when given empty args" do
+      it "does not parse them" do
+        expect(OptionParser).not_to receive(:new)
+        Parser.parse([])
+      end
+
+      it "still returns a `:files_or_directories_to_run` entry since callers expect that" do
+        expect(
+          Parser.parse([])
+        ).to eq(:files_or_directories_to_run => [])
+      end
+    end
+
+    it 'does not mutate the provided args array' do
+      args = %w[ --require foo ]
+      expect { Parser.parse(args) }.not_to change { args }
     end
 
     it "proposes you to use --help and returns an error on incorrect argument" do
-      parser = Parser.new
-      option = "--my_wrong_arg"
+      parser = Parser.new(["--my_wrong_arg"])
+      expect(parser).to receive(:abort).with(a_string_including('use --help'))
+      parser.parse
+    end
 
-      expect(parser).to receive(:abort) do |msg|
-        expect(msg).to include('use --help', option)
-      end
-
-      parser.parse([option])
+    it 'treats additional arguments as `:files_or_directories_to_run`' do
+      options = Parser.parse(%w[ path/to/spec.rb --fail-fast spec/unit -Ibar 1_spec.rb:23 ])
+      expect(options).to include(
+        :files_or_directories_to_run => %w[ path/to/spec.rb spec/unit 1_spec.rb:23 ]
+      )
     end
 
     {
@@ -34,45 +53,83 @@ module RSpec::Core
     }.each do |long, shorts|
       shorts.each do |option|
         it "won't parse #{option} as a shorthand for #{long}" do
-          parser = Parser.new
-
-          expect(parser).to receive(:abort) do |msg|
-            expect(msg).to include('use --help', option)
-          end
-
-          parser.parse([option])
+          parser = Parser.new([option])
+          expect(parser).to receive(:abort).with(a_string_including('use --help'))
+          parser.parse
         end
       end
     end
 
-    describe "--default_path" do
-      it "gets converted to --default-path" do
-        options = Parser.parse(%w[--default_path foo])
-        expect(options[:default_path]).to eq "foo"
+    %w[ -h --help ].each do |option|
+      it 'sets the `:runner` option with the `PrintHelp` invocation' do
+        parser = Parser.new([option])
+
+        options = parser.parse
+
+        expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::PrintHelp)
       end
     end
 
-    describe "--line_number" do
-      it "gets converted to --line-number" do
-        options = Parser.parse(%w[--line_number 3])
-        expect(options[:line_numbers]).to eq ["3"]
+    %w[ -v --version ].each do |option|
+      describe option do
+        it 'sets the `:runner` option with the `PrintVersion` invocation' do
+          parser = Parser.new([option])
+
+          options = parser.parse
+
+          expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::PrintVersion)
+        end
       end
     end
 
+    %w[ -X --drb ].each do |option|
+      describe option do
+        let(:parser) { Parser.new([option]) }
+
+        it 'sets the `:drb` option to true' do
+          options = parser.parse
+
+          expect(options[:drb]).to be(true)
+        end
+
+        it 'sets the `:runner` option with the `DrbWithFallback` invocation' do
+          options = parser.parse
+
+          expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::DRbWithFallback)
+        end
+      end
+    end
+
+    describe '--init' do
+      let(:initialize_project) { double(:initialize_project) }
+
+      it 'sets the `:runner` option with the `InitializeProject` invocation' do
+        parser = Parser.new(["--init"])
+
+        options = parser.parse
+
+        expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::InitializeProject)
+      end
+    end
+
+    describe "-I" do
+      it "sets the path" do
+        options = Parser.parse(%w[-I path/to/foo])
+        expect(options[:libs]).to eq %w[path/to/foo]
+      end
+
+      context "with a string containing `#{File::PATH_SEPARATOR}`" do
+        it "splits into multiple paths, just like Ruby's `-I` option" do
+          options = Parser.parse(%W[-I path/to/foo -I path/to/bar#{File::PATH_SEPARATOR}path/to/baz])
+          expect(options[:libs]).to eq %w[path/to/foo path/to/bar path/to/baz]
+        end
+      end
+    end
 
     describe "--default-path" do
       it "sets the default path where RSpec looks for examples" do
         options = Parser.parse(%w[--default-path foo])
         expect(options[:default_path]).to eq "foo"
-      end
-    end
-
-    %w[--line-number -l].each do |option|
-      describe option do
-        it "sets the line number of an example to run" do
-          options = Parser.parse([option, "3"])
-          expect(options[:line_numbers]).to eq ["3"]
-        end
       end
     end
 
@@ -87,9 +144,8 @@ module RSpec::Core
 
     %w[--out -o].each do |option|
       describe option do
-        let(:options) { Parser.parse([option, 'out.txt']) }
-
         it "sets the output stream for the formatter" do
+          options = Parser.parse([option, 'out.txt'])
           expect(options[:formatters].last).to eq(['progress', 'out.txt'])
         end
 
@@ -113,6 +169,43 @@ module RSpec::Core
       end
     end
 
+    describe "--deprecation-out" do
+      it 'sets the deprecation stream' do
+        options = Parser.parse(["--deprecation-out", "path/to/log"])
+        expect(options).to include(:deprecation_stream => "path/to/log")
+      end
+    end
+
+    describe "--only-failures" do
+      it 'is equivalent to `--tag last_run_status:failed`' do
+        tag = Parser.parse(%w[ --tag last_run_status:failed ])
+        only_failures = Parser.parse(%w[ --only-failures ])
+
+        expect(only_failures).to include(tag)
+      end
+    end
+
+    %w[--next-failure -n].each do |option|
+      describe option do
+        it 'is equivalent to `--tag last_run_status:failed --fail-fast --order defined`' do
+          long_form = Parser.parse(%w[ --tag last_run_status:failed --fail-fast --order defined ])
+          next_failure = Parser.parse([option])
+
+          expect(next_failure).to include(long_form)
+        end
+
+        it 'does not force `--order defined` over a specified `--seed 1234` option that comes before it' do
+          options = Parser.parse(['--seed', '1234', option])
+          expect(options).to include(:order => "rand:1234")
+        end
+
+        it 'does not force `--order defined` over a specified `--seed 1234` option that comes after it' do
+          options = Parser.parse([option, '--seed', '1234'])
+          expect(options).to include(:order => "rand:1234")
+        end
+      end
+    end
+
     %w[--example -e].each do |option|
       describe option do
         it "escapes the arg" do
@@ -123,11 +216,26 @@ module RSpec::Core
       end
     end
 
+    %w[--example-matches -E].each do |option|
+      describe option do
+        it "does not escape the arg" do
+          options = Parser.parse([option, 'this (and that)\b'])
+          expect(options[:full_description].length).to eq(1)
+          expect(/this (and that)\b/).to eq(options[:full_description].first)
+        end
+      end
+    end
+
     %w[--pattern -P].each do |option|
       describe option do
         it "sets the filename pattern" do
           options = Parser.parse([option, 'spec/**/*.spec'])
           expect(options[:pattern]).to eq('spec/**/*.spec')
+        end
+
+        it 'combines multiple patterns' do
+          options = Parser.parse([option, 'spec/**/*.spec', option, 'tests/**/*.spec'])
+          expect(options[:pattern]).to eq('spec/**/*.spec,tests/**/*.spec')
         end
       end
     end
@@ -227,6 +335,22 @@ module RSpec::Core
       end
     end
 
+    describe "--bisect" do
+      it "sets the `:bisect` option" do
+        options = Parser.parse(%w[ --bisect ])
+
+        expect(options[:bisect]).to be(true)
+      end
+
+      it "sets the `:runner` option with the `Bisect` invocation" do
+        parser = Parser.new(['--bisect'])
+
+        options = parser.parse
+
+        expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::Bisect)
+      end
+    end
+
     describe '--profile' do
       it 'sets profile_examples to true by default' do
         options = Parser.parse(%w[--profile])
@@ -251,12 +375,43 @@ module RSpec::Core
       end
     end
 
-    describe '--warning' do
-      it 'enables warnings' do
-        options = Parser.parse(%w[--warnings])
-        expect(options[:warnings]).to eq true
+    describe '--fail-fast' do
+      it 'warns when a non-integer is specified as fail count' do
+        expect_warning_without_call_site a_string_including("--fail-fast", "three")
+        Parser.parse(%w[--fail-fast=three])
       end
     end
 
+    describe '--warning' do
+      around do |ex|
+        verbose = $VERBOSE
+        ex.run
+        $VERBOSE = verbose
+      end
+
+      it 'immediately enables warnings so that warnings are issued for files loaded by `--require`' do
+        $VERBOSE = false
+
+        expect {
+          Parser.parse(%w[--warnings])
+        }.to change { $VERBOSE }.from(false).to(true)
+      end
+    end
+
+    describe '--force-color' do
+      it 'aborts if --no-color was previously set' do
+        parser = Parser.new(%w[--no-color --force-color])
+        expect(parser).to receive(:abort).with(a_string_including('only use one of `--force-color` and `--no-color`'))
+        parser.parse
+      end
+    end
+
+    describe '--no-color' do
+      it 'aborts if --force-color was previously set' do
+        parser = Parser.new(%w[--force-color --no-color])
+        expect(parser).to receive(:abort).with(a_string_including('only use one of --force-color and --no-color'))
+        parser.parse
+      end
+    end
   end
 end

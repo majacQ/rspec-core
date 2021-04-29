@@ -1,11 +1,13 @@
-require 'rspec/core/formatters/legacy_formatter'
+RSpec::Support.require_rspec_support "directory_maker"
 
 # ## Built-in Formatters
 #
-# * progress (default) - prints dots for passing examples, `F` for failures, `*` for pending
-# * documentation - prints the docstrings passed to `describe` and `it` methods (and their aliases)
+# * progress (default) - Prints dots for passing examples, `F` for failures, `*`
+#                        for pending.
+# * documentation - Prints the docstrings passed to `describe` and `it` methods
+#                   (and their aliases).
 # * html
-# * json - useful for archiving data for subsequent analysis
+# * json - Useful for archiving data for subsequent analysis.
 #
 # The progress formatter is the default, but you can choose any one or more of
 # the other formatters by passing with the `--format` (or `-f` for short)
@@ -23,41 +25,64 @@ require 'rspec/core/formatters/legacy_formatter'
 # ## Custom Formatters
 #
 # You can tell RSpec to use a custom formatter by passing its path and name to
-# the `rspec` commmand. For example, if you define MyCustomFormatter in
+# the `rspec` command. For example, if you define MyCustomFormatter in
 # path/to/my_custom_formatter.rb, you would type this command:
 #
 #     rspec --require path/to/my_custom_formatter.rb --format MyCustomFormatter
 #
 # The reporter calls every formatter with this protocol:
 #
-# * `start(expected_example_count)`
-# * zero or more of the following
-#   * `example_group_started(group)`
-#   * `example_started(example)`
-#   * `example_passed(example)`
-#   * `example_failed(example)`
-#   * `example_pending(example)`
-#   * `message(string)`
-# * `stop`
-# * `start_dump`
-# * `dump_pending`
-# * `dump_failures`
-# * `dump_summary(duration, example_count, failure_count, pending_count)`
-# * `seed(value)`
-# * `close`
+# * To start
+#   * `start(StartNotification)`
+# * Once per example group
+#   * `example_group_started(GroupNotification)`
+# * Once per example
+#   * `example_started(ExampleNotification)`
+# * One of these per example, depending on outcome
+#   * `example_passed(ExampleNotification)`
+#   * `example_failed(FailedExampleNotification)`
+#   * `example_pending(ExampleNotification)`
+# * Optionally at any time
+#   * `message(MessageNotification)`
+# * At the end of the suite
+#   * `stop(ExamplesNotification)`
+#   * `start_dump(NullNotification)`
+#   * `dump_pending(ExamplesNotification)`
+#   * `dump_failures(ExamplesNotification)`
+#   * `dump_summary(SummaryNotification)`
+#   * `seed(SeedNotification)`
+#   * `close(NullNotification)`
 #
-# You can either implement all of those methods or subclass
-# `RSpec::Core::Formatters::BaseTextFormatter` and override the methods you want
-# to enhance.
+# Only the notifications to which you subscribe your formatter will be called
+# on your formatter. To subscribe your formatter use:
+# `RSpec::Core::Formatters#register` e.g.
+#
+# `RSpec::Core::Formatters.register FormatterClassName, :example_passed, :example_failed`
+#
+# We recommend you implement the methods yourself; for simplicity we provide the
+# default formatter output via our notification objects but if you prefer you
+# can subclass `RSpec::Core::Formatters::BaseTextFormatter` and override the
+# methods you wish to enhance.
 #
 # @see RSpec::Core::Formatters::BaseTextFormatter
 # @see RSpec::Core::Reporter
 module RSpec::Core::Formatters
-  autoload :DocumentationFormatter, 'rspec/core/formatters/documentation_formatter'
-  autoload :HtmlFormatter,          'rspec/core/formatters/html_formatter'
-  autoload :ProgressFormatter,      'rspec/core/formatters/progress_formatter'
-  autoload :JsonFormatter,          'rspec/core/formatters/json_formatter'
+  autoload :DocumentationFormatter,   'rspec/core/formatters/documentation_formatter'
+  autoload :HtmlFormatter,            'rspec/core/formatters/html_formatter'
+  autoload :FallbackMessageFormatter, 'rspec/core/formatters/fallback_message_formatter'
+  autoload :ProgressFormatter,        'rspec/core/formatters/progress_formatter'
+  autoload :ProfileFormatter,         'rspec/core/formatters/profile_formatter'
+  autoload :JsonFormatter,            'rspec/core/formatters/json_formatter'
+  autoload :BisectDRbFormatter,       'rspec/core/formatters/bisect_drb_formatter'
+  autoload :ExceptionPresenter,       'rspec/core/formatters/exception_presenter'
+  autoload :FailureListFormatter,     'rspec/core/formatters/failure_list_formatter'
 
+  # Register the formatter class
+  # @param formatter_class [Class] formatter class to register
+  # @param notifications [Symbol, ...] one or more notifications to be
+  #   registered to the specified formatter
+  #
+  # @see RSpec::Core::Formatters::BaseFormatter
   def self.register(formatter_class, *notifications)
     Loader.formatters[formatter_class] = notifications
   end
@@ -71,7 +96,7 @@ module RSpec::Core::Formatters
   class Loader
     # @api private
     #
-    # Internal formatters are stored here when loaded
+    # Internal formatters are stored here when loaded.
     def self.formatters
       @formatters ||= {}
     end
@@ -80,39 +105,71 @@ module RSpec::Core::Formatters
     def initialize(reporter)
       @formatters = []
       @reporter = reporter
+      self.default_formatter = 'progress'
     end
-    attr_reader :formatters, :reporter
 
-    # @api private
+    # @return [Array] the loaded formatters
+    attr_reader :formatters
+
+    # @return [Reporter] the reporter
+    attr_reader :reporter
+
+    # @return [String] the default formatter to setup, defaults to `progress`
+    attr_accessor :default_formatter
+
+    # @private
+    def prepare_default(output_stream, deprecation_stream)
+      reporter.prepare_default(self, output_stream, deprecation_stream)
+    end
+
+    # @private
     def setup_default(output_stream, deprecation_stream)
-      if @formatters.empty?
-        add 'progress', output_stream
-      end
+      add default_formatter, output_stream if @formatters.empty?
+
       unless @formatters.any? { |formatter| DeprecationFormatter === formatter }
         add DeprecationFormatter, deprecation_stream, output_stream
       end
+
+      unless existing_formatter_implements?(:message)
+        add FallbackMessageFormatter, output_stream
+      end
+
+      return unless RSpec.configuration.profile_examples?
+      return if existing_formatter_implements?(:dump_profile)
+
+      add RSpec::Core::Formatters::ProfileFormatter, output_stream
     end
 
-    # @api private
+    # @private
     def add(formatter_to_use, *paths)
+      # If a formatter instance was passed, we can register it directly,
+      # with no need for any of the further processing that happens below.
+      if Loader.formatters.key?(formatter_to_use.class)
+        register formatter_to_use, notifications_for(formatter_to_use.class)
+        return
+      end
+
       formatter_class = find_formatter(formatter_to_use)
 
-      args = paths.map { |p| String === p ? file_at(p) : p }
+      args = paths.map { |p| p.respond_to?(:puts) ? p : open_stream(p) }
 
       if !Loader.formatters[formatter_class].nil?
         formatter = formatter_class.new(*args)
-        @reporter.register_listener formatter, *notifications_for(formatter_class)
+        register formatter, notifications_for(formatter_class)
+      elsif defined?(RSpec::LegacyFormatters)
+        formatter = RSpec::LegacyFormatters.load_formatter formatter_class, *args
+        register formatter, formatter.notifications
       else
-        formatter = LegacyFormatter.new(formatter_class, *args)
-        @reporter.register_listener formatter, *formatter.notifications
+        raise ArgumentError, <<-ERROR.gsub(/\s*\|/, ' ')
+          |The #{formatter_class} formatter uses the deprecated formatter
+          |interface not supported directly by RSpec 4.
+          |
+          |To continue to use this formatter you must install the
+          |`rspec-legacy_formatters` gem, which provides support
+          |for legacy formatters or upgrade the formatter to a
+          |compatible version.
+        ERROR
       end
-
-      @formatters << formatter unless duplicate_formatter_exists?(formatter)
-      if formatter.is_a?(LegacyFormatter)
-        RSpec.warn_deprecation "The #{formatter_class} formatter uses the deprecated formatter interface.\n Formatter added at: #{::RSpec::CallerFilter.first_non_rspec_line}"
-      end
-
-      formatter
     end
 
   private
@@ -120,13 +177,25 @@ module RSpec::Core::Formatters
     def find_formatter(formatter_to_use)
       built_in_formatter(formatter_to_use) ||
       custom_formatter(formatter_to_use)   ||
-      (raise ArgumentError, "Formatter '#{formatter_to_use}' unknown - maybe you meant 'documentation' or 'progress'?.")
+      (raise ArgumentError, "Formatter '#{formatter_to_use}' unknown - " \
+                            "maybe you meant 'documentation' or 'progress'?.")
+    end
+
+    def register(formatter, notifications)
+      return if duplicate_formatter_exists?(formatter)
+      @reporter.register_listener formatter, *notifications
+      @formatters << formatter
+      formatter
     end
 
     def duplicate_formatter_exists?(new_formatter)
       @formatters.any? do |formatter|
-        formatter.class === new_formatter && formatter.output == new_formatter.output
+        formatter.class == new_formatter.class && formatter.output == new_formatter.output
       end
+    end
+
+    def existing_formatter_implements?(notification)
+      @reporter.registered_listeners(notification).any?
     end
 
     def built_in_formatter(key)
@@ -139,12 +208,16 @@ module RSpec::Core::Formatters
         ProgressFormatter
       when 'j', 'json'
         JsonFormatter
+      when 'bisect-drb'
+        BisectDRbFormatter
+      when 'f', 'failures'
+        FailureListFormatter
       end
     end
 
     def notifications_for(formatter_class)
-      formatter_class.ancestors.inject(Set.new) do |notifications, klass|
-        notifications + Loader.formatters.fetch(klass) { Set.new }
+      formatter_class.ancestors.inject(::RSpec::Core::Set.new) do |notifications, klass|
+        notifications.merge Loader.formatters.fetch(klass) { ::RSpec::Core::Set.new }
       end
     end
 
@@ -153,9 +226,9 @@ module RSpec::Core::Formatters
         formatter_ref
       elsif string_const?(formatter_ref)
         begin
-          formatter_ref.gsub(/^::/,'').split('::').inject(Object) { |const,string| const.const_get string }
+          formatter_ref.gsub(/^::/, '').split('::').inject(Object) { |a, e| a.const_get e }
         rescue NameError
-          require( path_for(formatter_ref) ) ? retry : raise
+          require(path_for(formatter_ref)) ? retry : raise
         end
       end
     end
@@ -176,16 +249,21 @@ module RSpec::Core::Formatters
     def underscore(camel_cased_word)
       word = camel_cased_word.to_s.dup
       word.gsub!(/::/, '/')
-      word.gsub!(/([A-Z]+)([A-Z][a-z])/,'\1_\2')
-      word.gsub!(/([a-z\d])([A-Z])/,'\1_\2')
+      word.gsub!(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
+      word.gsub!(/([a-z\d])([A-Z])/, '\1_\2')
       word.tr!("-", "_")
       word.downcase!
       word
     end
 
-    def file_at(path)
-      FileUtils.mkdir_p(File.dirname(path))
-      File.new(path, 'w')
+    def open_stream(path_or_wrapper)
+      if RSpec::Core::OutputWrapper === path_or_wrapper
+        path_or_wrapper.output = open_stream(path_or_wrapper.output)
+        path_or_wrapper
+      else
+        RSpec::Support::DirectoryMaker.mkdir_p(File.dirname(path_or_wrapper))
+        File.new(path_or_wrapper, 'w')
+      end
     end
   end
 end

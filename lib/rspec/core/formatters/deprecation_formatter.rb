@@ -1,9 +1,9 @@
-require 'rspec/core/formatters/helpers'
-require 'set'
+RSpec::Support.require_rspec_core "formatters/helpers"
 
 module RSpec
   module Core
     module Formatters
+      # @private
       class DeprecationFormatter
         Formatters.register self, :deprecation, :deprecation_summary
 
@@ -20,7 +20,8 @@ module RSpec
         def printer
           @printer ||= case deprecation_stream
                        when File
-                         ImmediatePrinter.new(FileStream.new(deprecation_stream), summary_stream, self)
+                         ImmediatePrinter.new(FileStream.new(deprecation_stream),
+                                              summary_stream, self)
                        when RaiseErrorStream
                          ImmediatePrinter.new(deprecation_stream, summary_stream, self)
                        else
@@ -36,7 +37,7 @@ module RSpec
           @seen_deprecations << notification
         end
 
-        def deprecation_summary(notification)
+        def deprecation_summary(_notification)
           printer.deprecation_summary
         end
 
@@ -56,6 +57,12 @@ module RSpec
           |deprecation warnings into errors, giving you the full backtrace.
         EOS
 
+        DEPRECATION_STREAM_NOTICE = "Pass `--deprecation-out` or set " \
+          "`config.deprecation_stream` to a file for full output."
+        TOO_MANY_WARNINGS_NOTICE  = "Too many similar deprecation messages " \
+          "reported, disregarding further reports. #{DEPRECATION_STREAM_NOTICE}"
+
+        # @private
         SpecifiedDeprecationMessage = Struct.new(:type) do
           def initialize(data)
             @message = data.message
@@ -63,22 +70,27 @@ module RSpec
           end
 
           def to_s
-            @message
+            output_formatted @message
           end
 
           def too_many_warnings_message
-            msg = "Too many similar deprecation messages reported, disregarding further reports."
-            msg << " Set config.deprecation_stream to a File for full output."
-            msg
+            TOO_MANY_WARNINGS_NOTICE
           end
 
           private
+
+          def output_formatted(str)
+            return str unless str.lines.count > 1
+            separator = '-' * 80
+            "#{separator}\n#{str.chomp}\n#{separator}"
+          end
 
           def deprecation_type_for(data)
             data.message.gsub(/(\w+\/)+\w+\.rb:\d+/, '')
           end
         end
 
+        # @private
         GeneratedDeprecationMessage = Struct.new(:type) do
           def initialize(data)
             @data = data
@@ -86,19 +98,18 @@ module RSpec
           end
 
           def to_s
-            msg =  "#{@data.deprecated} is deprecated."
+            msg = String.new("#{@data.deprecated} is deprecated.")
             msg << " Use #{@data.replacement} instead." if @data.replacement
-            msg << " Called from #{@data.call_site}." if @data.call_site
+            msg << " Called from #{@data.call_site}."   if @data.call_site
             msg
           end
 
           def too_many_warnings_message
-            msg = "Too many uses of deprecated '#{type}'."
-            msg << " Set config.deprecation_stream to a File for full output."
-            msg
+            "Too many uses of deprecated '#{type}'. #{DEPRECATION_STREAM_NOTICE}"
           end
         end
 
+        # @private
         class ImmediatePrinter
           attr_reader :deprecation_stream, :summary_stream, :deprecation_formatter
 
@@ -120,10 +131,9 @@ module RSpec
           end
         end
 
+        # @private
         class DelayedPrinter
           TOO_MANY_USES_LIMIT = 4
-
-          include ::RSpec::Core::Formatters::Helpers
 
           attr_reader :deprecation_stream, :summary_stream, :deprecation_formatter
 
@@ -156,7 +166,7 @@ module RSpec
             print_deferred_deprecation_warnings
             deprecation_stream.puts RAISE_ERROR_CONFIG_NOTICE
 
-            summary_stream.puts "\n#{pluralize(deprecation_formatter.count, 'deprecation warning')} total"
+            summary_stream.puts "\n#{Helpers.pluralize(deprecation_formatter.count, 'deprecation warning')} total"
           end
 
           def print_deferred_deprecation_warnings
@@ -169,23 +179,21 @@ module RSpec
           end
         end
 
+        # @private
         # Not really a stream, but is usable in place of one.
         class RaiseErrorStream
-          include ::RSpec::Core::Formatters::Helpers
-
           def puts(message)
             raise DeprecationError, message
           end
 
           def summarize(summary_stream, deprecation_count)
-            summary_stream.puts "\n#{pluralize(deprecation_count, 'deprecation')} found."
+            summary_stream.puts "\n#{Helpers.pluralize(deprecation_count, 'deprecation')} found."
           end
         end
 
+        # @private
         # Wraps a File object and provides file-specific operations.
         class FileStream
-          include ::RSpec::Core::Formatters::Helpers
-
           def initialize(file)
             @file = file
 
@@ -201,14 +209,15 @@ module RSpec
           end
 
           def summarize(summary_stream, deprecation_count)
-            summary_stream.puts "\n#{pluralize(deprecation_count, 'deprecation')} logged to #{@file.path}"
+            path = @file.respond_to?(:path) ? @file.path : @file.inspect
+            summary_stream.puts "\n#{Helpers.pluralize(deprecation_count, 'deprecation')} logged to #{path}"
             puts RAISE_ERROR_CONFIG_NOTICE
           end
         end
-
       end
     end
 
+    # Deprecation Error.
     DeprecationError = Class.new(StandardError)
   end
 end

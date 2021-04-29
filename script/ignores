@@ -5,8 +5,6 @@
 lib/rspec/core/configuration.rb:        alias_method alias_name, name
 lib/rspec/core/configuration.rb:        alias_method "#{alias_name}=", "#{name}="
 lib/rspec/core/configuration.rb:        names.each {|name| alias_method "#{name}?", name}
-lib/rspec/core/configuration.rb:      alias_method :color_enabled, :color
-lib/rspec/core/configuration.rb:      alias_method :color_enabled=, :color=
 lib/rspec/core/configuration.rb:      alias_method :formatter=, :add_formatter
 lib/rspec/core/configuration.rb:      alias_method :alias_it_should_behave_like_to, :alias_it_behaves_like_to
 lib/rspec/core/configuration.rb:      alias_method :filter_run, :filter_run_including
@@ -52,21 +50,6 @@ lib/rspec/core/example_group.rb:      extend  Hooks
 lib/rspec/core/example_group.rb:      extend SharedExampleGroup
 lib/rspec/core/memoized_helpers.rb:        mod.extend(ClassMethods)
 lib/rspec/core/shared_example_group.rb:extend RSpec::Core::SharedExampleGroup::TopLevelDSL
-
-# These uses of `extend` would be nice to get rid of, but our prior attempts
-# to convert the metadata hash to a composition-based design have created perf
-# regressions. These lines also only are only executed when an example or
-# example group is defined, so they shouldn't ever blow the method cache
-# at spec run time.
-lib/rspec/core/metadata.rb:          store(:example_group, {:example_group => parent_group_metadata\[:example_group\].extend(GroupMetadataHash)}.extend(GroupMetadataHash))
-lib/rspec/core/metadata.rb:          store(:example_group, {}.extend(GroupMetadataHash))
-lib/rspec/core/metadata.rb:        dup.extend(ExampleMetadataHash).configure_for_example(description, user_metadata)
-
-# This use of `extend` only happens on 1.8.7, when a shared example group
-# is defined (to provide the Proc#source_location method on the provided
-# block). It should only happen at spec definition time (unless users are
-# defining shared example groups at spec run time).
-lib/rspec/core/shared_example_group.rb:            block.extend Module.new {
 
 # This happens when an example group is defined, not at spec run time.
 lib/rspec/core/example_group.rb:        subclass = Class.new(parent)

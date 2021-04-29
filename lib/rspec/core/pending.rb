@@ -1,36 +1,48 @@
 module RSpec
   module Core
+    # Provides methods to mark examples as pending. These methods are available
+    # to be called from within any example or hook.
     module Pending
-      class SkipDeclaredInExample < StandardError; end
+      # Raised in the middle of an example to indicate that it should be marked
+      # as skipped.
+      class SkipDeclaredInExample < StandardError
+        attr_reader :argument
 
-      # If Test::Unit is loaed, we'll use its error as baseclass, so that Test::Unit
-      # will report unmet RSpec expectations as failures rather than errors.
+        def initialize(argument)
+          @argument = argument
+        end
+      end
+
+      # If Test::Unit is loaded, we'll use its error as baseclass, so that
+      # Test::Unit will report unmet RSpec expectations as failures rather than
+      # errors.
       begin
         class PendingExampleFixedError < Test::Unit::AssertionFailedError; end
       rescue
         class PendingExampleFixedError < StandardError; end
       end
 
+      # @private
       NO_REASON_GIVEN = 'No reason given'
+
+      # @private
       NOT_YET_IMPLEMENTED = 'Not yet implemented'
 
       # @overload pending()
       # @overload pending(message)
-      # @overload pending(message, &block)
       #
       # Marks an example as pending. The rest of the example will still be
       # executed, and if it passes the example will fail to indicate that the
       # pending can be removed.
       #
-      # @param [String] message optional message to add to the summary report.
+      # @param message [String] optional message to add to the summary report.
       #
       # @example
-      #
-      #     describe "an example" do
+      #     describe "some behaviour" do
       #       # reported as "Pending: no reason given"
       #       it "is pending with no message" do
       #         pending
-      #         raise "broken" 
+      #         raise "broken"
       #       end
       #
       #       # reported as "Pending: something else getting finished"
@@ -40,46 +52,42 @@ module RSpec
       #       end
       #     end
       #
-      # @note `before(:each)` hooks are eval'd when you use the `pending`
-      #   method within an example. If you want to declare an example `pending`
-      #   and bypass the `before` hooks as well, you can pass `:pending => true`
-      #   to the `it` method:
-      #
-      #       it "does something", :pending => true do
-      #         # ...
-      #       end
-      #
-      #   or pass `:pending => "something else getting finished"` to add a
-      #   message to the summary report:
-      #
-      #       it "does something", :pending => "something else getting finished" do
-      #         # ...
-      #       end
-      def pending(*args)
+      # @note When using `pending` inside an example body using this method
+      #   hooks, such as `before(:example)`, have already be run. This means that
+      #   a failure from the code in the `before` hook will prevent the example
+      #   from being considered pending, as the example body would not be
+      #   executed. If you need to consider hooks as pending as well you can use
+      #   the pending metadata as an alternative, e.g.
+      #   `it "does something", pending: "message"`.
+      def pending(message=nil)
         current_example = RSpec.current_example
 
-        if current_example
-          Pending.mark_pending! current_example, args.first
+        if block_given?
+          raise ArgumentError, <<-EOS.gsub(/^\s+\|/, '')
+            |Passing a block within an example is not supported.
+            |
+            |Move the code in the block provided to `pending` into the rest of
+            |the example body.
+            |
+            |Called from #{CallerFilter.first_non_rspec_line}.
+            |
+          EOS
+        elsif current_example
+          Pending.mark_pending! current_example, message
         else
-          self.class.before(:each) { pending(*args) }
+          raise "`pending` may not be used outside of examples, such as in " \
+                "before(:context). Maybe you want `skip`?"
         end
       end
 
       # @overload skip()
       # @overload skip(message)
-      # @overload skip(message, &block)
       #
-      # Marks an example as pending and skips execution when called without a
-      # block. When called with a block, skips just that block and does not
-      # mark the example as pending. The block form is provided as replacement
-      # for RSpec 2's pending-with-block feature, and is not recommended for
-      # new code. Use simple conditionals instead.
+      # Marks an example as pending and skips execution.
       #
-      # @param [String] message optional message to add to the summary report.
-      # @block [Block] block optional block to be skipped
+      # @param message [String] optional message to add to the summary report.
       #
       # @example
-      #
       #     describe "an example" do
       #       # reported as "Pending: no reason given"
       #       it "is skipped with no message" do
@@ -90,50 +98,51 @@ module RSpec
       #       it "is skipped with a custom message" do
       #         skip "something else getting finished"
       #       end
-      #
-      #       # Passes
-      #       it "contains a skipped statement" do
-      #         skip do
-      #           fail
-      #         end
-      #       end
       #     end
-      def skip(*args, &block)
-        return block && block.call if Pending.guarded?(*args)
-        return if block
-
+      def skip(message=nil)
         current_example = RSpec.current_example
 
-        if current_example
-          Pending.mark_pending! current_example, args.first
-          current_example.metadata[:skip] = true
-          raise SkipDeclaredInExample
-        else
-          self.class.before(:each) { skip(*args) }
-        end
+        Pending.mark_skipped!(current_example, message) if current_example
+
+        raise SkipDeclaredInExample.new(message)
       end
 
+      # @private
+      #
+      # Mark example as skipped.
+      #
+      # @param example [RSpec::Core::Example] the example to mark as skipped
+      # @param message_or_bool [Boolean, String] the message to use, or true
+      def self.mark_skipped!(example, message_or_bool)
+        Pending.mark_pending! example, message_or_bool
+        example.metadata[:skip] = true
+      end
+
+      # @private
+      #
+      # Mark example as pending.
+      #
+      # @param example [RSpec::Core::Example] the example to mark as pending
+      # @param message_or_bool [Boolean, String] the message to use, or true
       def self.mark_pending!(example, message_or_bool)
         message = if !message_or_bool || !(String === message_or_bool)
-          NO_REASON_GIVEN
-        else
-          message_or_bool
-        end
+                    NO_REASON_GIVEN
+                  else
+                    message_or_bool
+                  end
 
         example.metadata[:pending] = true
-        example.metadata[:execution_result][:pending_message] = message
-        example.execution_result[:pending_fixed] = false
+        example.execution_result.pending_message = message
+        example.execution_result.pending_fixed = false
       end
 
+      # @private
+      #
+      # Mark example as fixed.
+      #
+      # @param example [RSpec::Core::Example] the example to mark as fixed
       def self.mark_fixed!(example)
-        example.metadata[:pending] = false
-        example.metadata[:execution_result][:pending_fixed] = true
-      end
-
-      def self.guarded?(*args)
-        options = args.last.is_a?(Hash) ? args.pop : {}
-
-        options[:unless] || (options.has_key?(:if) && !options[:if])
+        example.execution_result.pending_fixed = true
       end
     end
   end

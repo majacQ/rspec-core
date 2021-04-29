@@ -7,7 +7,7 @@ module RSpec
     # In addition to metadata that is used internally, this also stores
     # user-supplied metadata, e.g.
     #
-    #     describe Something, :type => :ui do
+    #     RSpec.describe Something, :type => :ui do
     #       it "does something", :slow => true do
     #         # ...
     #       end
@@ -24,15 +24,52 @@ module RSpec
     # @see FilterManager
     # @see Configuration#filter_run_including
     # @see Configuration#filter_run_excluding
-    class Metadata < Hash
+    module Metadata
+      # Matches strings either at the beginning of the input or prefixed with a
+      # whitespace, containing the current path, either postfixed with the
+      # separator, or at the end of the string. Match groups are the character
+      # before and the character after the string if any.
+      #
+      # http://rubular.com/r/fT0gmX6VJX
+      # http://rubular.com/r/duOrD4i3wb
+      # http://rubular.com/r/sbAMHFrOx1
+      def self.relative_path_regex
+        @relative_path_regex ||= /(\A|\s)#{File.expand_path('.')}(#{File::SEPARATOR}|\s|\Z)/
+      end
 
+      # @api private
+      #
+      # @param line [String] current code line
+      # @return [String] relative path to line
       def self.relative_path(line)
-        line = line.sub(File.expand_path("."), ".")
-        line = line.sub(/\A([^:]+:\d+)$/, '\\1')
-        return nil if line == '-e:1'
+        line = line.sub(relative_path_regex, "\\1.\\2".freeze)
+        line = line.sub(/\A([^:]+:\d+)$/, '\\1'.freeze)
+        return nil if line == '-e:1'.freeze
         line
       rescue SecurityError
+        # :nocov:
         nil
+        # :nocov:
+      end
+
+      # @private
+      # Iteratively walks up from the given metadata through all
+      # example group ancestors, yielding each metadata hash along the way.
+      def self.ascending(metadata)
+        yield metadata
+        return unless (group_metadata = metadata.fetch(:example_group) { metadata[:parent_example_group] })
+
+        loop do
+          yield group_metadata
+          break unless (group_metadata = group_metadata[:parent_example_group])
+        end
+      end
+
+      # @private
+      # Returns an enumerator that iteratively walks up the given metadata through all
+      # example group ancestors, yielding each metadata hash along the way.
+      def self.ascend(metadata)
+        enum_for(:ascending, metadata)
       end
 
       # @private
@@ -43,271 +80,215 @@ module RSpec
       def self.build_hash_from(args)
         hash = args.last.is_a?(Hash) ? args.pop : {}
 
-        while args.last.is_a?(Symbol)
-          hash[args.pop] = true
-        end
+        hash[args.pop] = true while args.last.is_a?(Symbol)
 
         hash
       end
 
-      module MetadataHash
-
-        # @private
-        # Supports lazy evaluation of some values. Extended by
-        # ExampleMetadataHash and GroupMetadataHash, which get mixed in to
-        # Metadata for ExampleGroups and Examples (respectively).
-        def [](key)
-          store_computed(key) unless has_key?(key)
-          super
-        end
-
-        def fetch(key, *args)
-          store_computed(key) unless has_key?(key)
-          super
-        end
-
-        private
-
-        def store_computed(key)
-          case key
-          when :location
-            store(:location, location)
-          when :file_path, :line_number
-            file_path, line_number = file_and_line_number
-            store(:file_path, file_path)
-            store(:line_number, line_number)
-          when :execution_result
-            store(:execution_result, {})
-          when :describes, :described_class
-            klass = described_class
-            store(:described_class, klass)
-            # TODO (2011-11-07 DC) deprecate :describes as a key
-            store(:describes, klass)
-          when :full_description
-            store(:full_description, full_description)
-          when :description
-            store(:description, build_description_from(*self[:description_args]))
-          when :description_args
-            store(:description_args, [])
-          end
-        end
-
-        def location
-          "#{self[:file_path]}:#{self[:line_number]}"
-        end
-
-        def file_and_line_number
-          first_caller_from_outside_rspec =~ /(.+?):(\d+)(|:\d+)/
-          return [Metadata::relative_path($1), $2.to_i]
-        end
-
-        def first_caller_from_outside_rspec
-          self[:caller].detect {|l| l !~ /\/lib\/rspec\/core/}
-        end
-
-        def method_description_after_module?(parent_part, child_part)
-          return false unless parent_part.is_a?(Module)
-          child_part =~ /^(#|::|\.)/
-        end
-
-        def build_description_from(first_part = '', *parts)
-          description, _ = parts.inject([first_part.to_s, first_part]) do |(desc, last_part), this_part|
-            this_part = this_part.to_s
-            this_part = (' ' + this_part) unless method_description_after_module?(last_part, this_part)
-            [(desc + this_part), this_part]
-          end
-
-          description
-        end
-      end
-
-      # Mixed in to Metadata for an Example (extends MetadataHash) to support
-      # lazy evaluation of some values.
-      module ExampleMetadataHash
-        include MetadataHash
-
-        def described_class
-          self[:example_group].described_class
-        end
-
-        def full_description
-          build_description_from(self[:example_group][:full_description], *self[:description_args])
-        end
-      end
-
-      # Mixed in to Metadata for an ExampleGroup (extends MetadataHash) to
-      # support lazy evaluation of some values.
-      module GroupMetadataHash
-        include MetadataHash
-
-        def described_class
-          container_stack.each do |g|
-            [:described_class, :describes].each do |key|
-              if g.has_key?(key)
-                value = g[key]
-                return value unless value.nil?
-              end
-            end
-          end
-
-          container_stack.reverse.each do |g|
-            candidate = g[:description_args].first
-            return candidate unless String === candidate || Symbol === candidate
-          end
-
-          nil
-        end
-
-        def full_description
-          build_description_from(*FlatMap.flat_map(container_stack.reverse) {|a| a[:description_args]})
-        end
-
-        def container_stack
-          @container_stack ||= begin
-                                 groups = [group = self]
-                                 while group.has_key?(:example_group)
-                                   groups << group[:example_group]
-                                   group = group[:example_group]
-                                 end
-                                 groups
-                               end
-        end
-      end
-
-      def initialize(parent_group_metadata=nil)
-        if parent_group_metadata
-          update(parent_group_metadata)
-          store(:example_group, {:example_group => parent_group_metadata[:example_group].extend(GroupMetadataHash)}.extend(GroupMetadataHash))
-        else
-          store(:example_group, {}.extend(GroupMetadataHash))
-        end
-
-        yield self if block_given?
-      end
-
       # @private
-      def process(*args)
-        user_metadata = args.last.is_a?(Hash) ? args.pop : {}
-        ensure_valid_keys(user_metadata)
+      def self.deep_hash_dup(object)
+        return object.dup if Array === object
+        return object unless Hash  === object
 
-        self[:example_group].store(:description_args, args)
-        self[:example_group].store(:caller, user_metadata.delete(:caller) || caller)
-
-        update(user_metadata)
-      end
-
-      # @private
-      def for_example(description, user_metadata)
-        dup.extend(ExampleMetadataHash).configure_for_example(description, user_metadata)
-      end
-
-      # @private
-      def any_apply?(filters)
-        filters.any? {|k,v| filter_applies?(k,v)}
-      end
-
-      # @private
-      def all_apply?(filters)
-        filters.all? {|k,v| filter_applies?(k,v)}
-      end
-
-      # @private
-      def filter_applies?(key, value, metadata=self)
-        return metadata.filter_applies_to_any_value?(key, value) if Array === metadata[key] && !(Proc === value)
-        return metadata.line_number_filter_applies?(value)       if key == :line_numbers
-        return metadata.location_filter_applies?(value)          if key == :locations
-        return metadata.filters_apply?(key, value)               if Hash === value
-
-        return false unless metadata.has_key?(key)
-
-        case value
-        when Regexp
-          metadata[key] =~ value
-        when Proc
-          case value.arity
-          when 0 then value.call
-          when 2 then value.call(metadata[key], metadata)
-          else value.call(metadata[key])
-          end
-        else
-          metadata[key].to_s == value.to_s
+        object.inject(object.dup) do |duplicate, (key, value)|
+          duplicate[key] = deep_hash_dup(value)
+          duplicate
         end
       end
 
       # @private
-      def filters_apply?(key, value)
-        value.all? {|k, v| filter_applies?(k, v, self[key])}
+      def self.id_from(metadata)
+        "#{metadata[:rerun_file_path]}[#{metadata[:scoped_id]}]"
       end
 
       # @private
-      def filter_applies_to_any_value?(key, value)
-        self[key].any? {|v| filter_applies?(key, v, {key => value})}
+      def self.location_tuple_from(metadata)
+        [metadata[:absolute_file_path], metadata[:line_number]]
       end
 
       # @private
-      def location_filter_applies?(locations)
-        # it ignores location filters for other files
-        line_number = example_group_declaration_line(locations)
-        line_number ? line_number_filter_applies?(line_number) : true
-      end
+      # Used internally to populate metadata hashes with computed keys
+      # managed by RSpec.
+      class HashPopulator
+        attr_reader :metadata, :user_metadata, :description_args, :block
 
-      # @private
-      def line_number_filter_applies?(line_numbers)
-        preceding_declaration_lines = line_numbers.map {|n| RSpec.world.preceding_declaration_line(n)}
-        !(relevant_line_numbers & preceding_declaration_lines).empty?
-      end
+        def initialize(metadata, user_metadata, index_provider, description_args, block)
+          @metadata         = metadata
+          @user_metadata    = user_metadata
+          @index_provider   = index_provider
+          @description_args = description_args
+          @block            = block
+        end
 
-      protected
+        def populate
+          ensure_valid_user_keys
 
-      def configure_for_example(description, user_metadata)
-        store(:description_args, [description]) if description
-        store(:caller, user_metadata.delete(:caller) || caller)
-        update(user_metadata)
-      end
+          metadata[:block]            = block
+          metadata[:description_args] = description_args
+          metadata[:description]      = build_description_from(*metadata[:description_args])
+          metadata[:full_description] = full_description
+          metadata[:described_class]  = described_class
+
+          populate_location_attributes
+          metadata.update(user_metadata)
+        end
 
       private
 
-      RESERVED_KEYS = [
-        :description,
-        :example_group,
-        :execution_result,
-        :file_path,
-        :full_description,
-        :line_number,
-        :location
-      ]
+        def populate_location_attributes
+          backtrace = user_metadata.delete(:caller)
 
-      def ensure_valid_keys(user_metadata)
-        RESERVED_KEYS.each do |key|
-          if user_metadata.has_key?(key)
-            raise <<-EOM
-            #{"*"*50}
-:#{key} is not allowed
+          file_path, line_number = if backtrace
+                                     file_path_and_line_number_from(backtrace)
+                                   elsif block.respond_to?(:source_location)
+                                     block.source_location
+                                   else
+                                     file_path_and_line_number_from(caller)
+                                   end
 
-RSpec reserves some hash keys for its own internal use,
-including :#{key}, which is used on:
+          relative_file_path            = Metadata.relative_path(file_path)
+          absolute_file_path            = File.expand_path(relative_file_path)
+          metadata[:file_path]          = relative_file_path
+          metadata[:line_number]        = line_number.to_i
+          metadata[:location]           = "#{relative_file_path}:#{line_number}"
+          metadata[:absolute_file_path] = absolute_file_path
+          metadata[:rerun_file_path]  ||= relative_file_path
+          metadata[:scoped_id]          = build_scoped_id_for(absolute_file_path)
+        end
 
-            #{CallerFilter.first_non_rspec_line}.
+        def file_path_and_line_number_from(backtrace)
+          first_caller_from_outside_rspec = backtrace.find { |l| l !~ CallerFilter::LIB_REGEX }
+          first_caller_from_outside_rspec ||= backtrace.first
+          /(.+?):(\d+)(?:|:\d+)/.match(first_caller_from_outside_rspec).captures
+        end
 
-Here are all of RSpec's reserved hash keys:
+        def description_separator(parent_part, child_part)
+          if parent_part.is_a?(Module) && /^(?:#|::|\.)/.match(child_part.to_s)
+            ''.freeze
+          else
+            ' '.freeze
+          end
+        end
 
-            #{RESERVED_KEYS.join("\n  ")}
-            #{"*"*50}
+        def build_description_from(parent_description=nil, my_description=nil)
+          return parent_description.to_s unless my_description
+          return my_description.to_s if parent_description.to_s == ''
+          separator = description_separator(parent_description, my_description)
+          (parent_description.to_s + separator) << my_description.to_s
+        end
+
+        def build_scoped_id_for(file_path)
+          index = @index_provider.call(file_path).to_s
+          parent_scoped_id = metadata.fetch(:scoped_id) { return index }
+          "#{parent_scoped_id}:#{index}"
+        end
+
+        def ensure_valid_user_keys
+          RESERVED_KEYS.each do |key|
+            next unless user_metadata.key?(key)
+            raise <<-EOM.gsub(/^\s+\|/, '')
+              |#{"*" * 50}
+              |:#{key} is not allowed
+              |
+              |RSpec reserves some hash keys for its own internal use,
+              |including :#{key}, which is used on:
+              |
+              |  #{CallerFilter.first_non_rspec_line}.
+              |
+              |Here are all of RSpec's reserved hash keys:
+              |
+              |  #{RESERVED_KEYS.join("\n  ")}
+              |#{"*" * 50}
             EOM
           end
         end
       end
 
-      def example_group_declaration_line(locations)
-        locations[File.expand_path(self[:example_group][:file_path])] if self[:example_group]
+      # @private
+      class ExampleHash < HashPopulator
+        def self.create(group_metadata, user_metadata, index_provider, description, block)
+          example_metadata = group_metadata.dup
+          example_metadata[:execution_result] = Example::ExecutionResult.new
+          example_metadata[:example_group] = group_metadata
+          example_metadata[:shared_group_inclusion_backtrace] = SharedExampleGroupInclusionStackFrame.current_backtrace
+          example_metadata.delete(:parent_example_group)
+
+          description_args = description.nil? ? [] : [description]
+          hash = new(example_metadata, user_metadata, index_provider, description_args, block)
+          hash.populate
+          hash.metadata
+        end
+
+      private
+
+        def described_class
+          metadata[:example_group][:described_class]
+        end
+
+        def full_description
+          build_description_from(
+            metadata[:example_group][:full_description],
+            metadata[:description]
+          )
+        end
       end
 
-      # TODO - make this a method on metadata - the problem is
-      # metadata[:example_group] is not always a kind of GroupMetadataHash.
-      def relevant_line_numbers(metadata=self)
-        [metadata[:line_number]] + (metadata[:example_group] ? relevant_line_numbers(metadata[:example_group]) : [])
+      # @private
+      class ExampleGroupHash < HashPopulator
+        def self.create(parent_group_metadata, user_metadata, example_group_index, *args, &block)
+          group_metadata =
+            if parent_group_metadata
+              { **parent_group_metadata, :parent_example_group => parent_group_metadata }
+            else
+              {}
+            end
+
+          hash = new(group_metadata, user_metadata, example_group_index, args, block)
+          hash.populate
+          hash.metadata
+        end
+
+      private
+
+        def described_class
+          candidate = metadata[:description_args].first
+          return candidate unless NilClass === candidate || String === candidate
+          parent_group = metadata[:parent_example_group]
+          parent_group && parent_group[:described_class]
+        end
+
+        def full_description
+          description          = metadata[:description]
+          parent_example_group = metadata[:parent_example_group]
+          return description unless parent_example_group
+
+          parent_description   = parent_example_group[:full_description]
+          separator = description_separator(parent_example_group[:description_args].last,
+                                            metadata[:description_args].first)
+
+          parent_description + separator + description
+        end
       end
 
+      # @private
+      RESERVED_KEYS = [
+        :description,
+        :description_args,
+        :described_class,
+        :example_group,
+        :parent_example_group,
+        :execution_result,
+        :last_run_status,
+        :file_path,
+        :absolute_file_path,
+        :rerun_file_path,
+        :full_description,
+        :line_number,
+        :location,
+        :scoped_id,
+        :block,
+        :shared_group_inclusion_backtrace
+      ]
     end
   end
 end
