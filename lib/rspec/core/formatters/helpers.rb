@@ -1,3 +1,5 @@
+RSpec::Support.require_rspec_core "shell_escape"
+
 module RSpec
   module Core
     module Formatters
@@ -28,8 +30,8 @@ module RSpec
                       end
 
           if duration > 60
-            minutes = (duration.to_i / 60).to_i
-            seconds = duration - minutes * 60
+            minutes = (duration.round / 60).to_i
+            seconds = (duration - minutes * 60)
 
             "#{pluralize(minutes, 'minute')} #{pluralize(format_seconds(seconds, precision), 'second')}"
           else
@@ -56,6 +58,7 @@ module RSpec
         #
         # @see #strip_trailing_zeroes
         def self.format_seconds(float, precision=nil)
+          return '0' if float < 0
           precision ||= (float < 1) ? SUB_SECOND_PRECISION : DEFAULT_PRECISION
           formatted = "%.#{precision}f" % float
           strip_trailing_zeroes(formatted)
@@ -65,11 +68,13 @@ module RSpec
         #
         # Remove trailing zeros from a string.
         #
+        # Only remove trailing zeros after a decimal place.
+        # see: http://rubular.com/r/ojtTydOgpn
+        #
         # @param string [String] string with trailing zeros
         # @return [String] string with trailing zeros removed
         def self.strip_trailing_zeroes(string)
-          stripped = string.sub(/[^1-9]+$/, '')
-          stripped.empty? ? "0" : stripped
+          string.sub(/(?:(\..*[^0])0+|\.0+)$/, '\1')
         end
         private_class_method :strip_trailing_zeroes
 
@@ -81,7 +86,31 @@ module RSpec
         # @param string [String] word to be pluralized
         # @return [String] pluralized word
         def self.pluralize(count, string)
-          "#{count} #{string}#{'s' unless count.to_f == 1}"
+          pluralized_string = if count.to_f == 1
+                                string
+                              elsif string.end_with?('s') # e.g. "process"
+                                "#{string}es" # e.g. "processes"
+                              else
+                                "#{string}s"
+                              end
+
+          "#{count} #{pluralized_string}"
+        end
+
+        # @api private
+        # Given a list of example ids, organizes them into a compact, ordered list.
+        def self.organize_ids(ids)
+          grouped = ids.inject(Hash.new { |h, k| h[k] = [] }) do |hash, id|
+            file, id = Example.parse_id(id)
+            hash[file] << id
+            hash
+          end
+
+          grouped.sort_by(&:first).map do |file, grouped_ids|
+            grouped_ids = grouped_ids.sort_by { |id| id.split(':').map(&:to_i) }
+            id = Metadata.id_from(:rerun_file_path => file, :scoped_id => grouped_ids.join(','))
+            ShellEscape.conditionally_quote(id)
+          end
         end
       end
     end

@@ -2,8 +2,6 @@
 $_rspec_core_load_started_at = Time.now
 # rubocop:enable Style/GlobalVars
 
-require 'rbconfig'
-
 require "rspec/support"
 RSpec::Support.require_rspec_support "caller_filter"
 
@@ -13,7 +11,7 @@ RSpec::Support.define_optimized_require_for_rspec(:core) { |f| require_relative 
   version
   warnings
 
-  flat_map
+  set
   filter_manager
   dsl
   notifications
@@ -32,6 +30,7 @@ RSpec::Support.define_optimized_require_for_rspec(:core) { |f| require_relative 
   option_parser
   configuration_options
   runner
+  invocations
   example
   shared_example_group
   example_group
@@ -43,6 +42,12 @@ module RSpec
 
   extend RSpec::Core::Warnings
 
+  class << self
+    # Setters for shared global objects
+    # @api private
+    attr_writer :configuration, :world
+  end
+
   # Used to ensure examples get reloaded and user configuration gets reset to
   # defaults between multiple runs in the same process.
   #
@@ -50,6 +55,7 @@ module RSpec
   # they use the runner multiple times within the same process. Users must deal
   # themselves with re-configuration of RSpec before run.
   def self.reset
+    RSpec::ExampleGroups.remove_all_constants
     @world = nil
     @configuration = nil
   end
@@ -62,7 +68,7 @@ module RSpec
   # same process.
   def self.clear_examples
     world.reset
-    configuration.reporter.reset
+    configuration.reset_reporter
     configuration.start_time = ::RSpec::Core::Time.now
     configuration.reset_filters
   end
@@ -76,11 +82,7 @@ module RSpec
   # @see RSpec.configure
   # @see Core::Configuration
   def self.configuration
-    @configuration ||= begin
-                         config = RSpec::Core::Configuration.new
-                         config.expose_dsl_globally = true
-                         config
-                       end
+    @configuration ||= RSpec::Core::Configuration.new
   end
 
   # Yields the global configuration to a block.
@@ -98,39 +100,15 @@ module RSpec
   # The example being executed.
   #
   # The primary audience for this method is library authors who need access
-  # to the example currently being executed and also want to support all
-  # versions of RSpec 2 and 3.
-  #
-  # @example
-  #
-  #     RSpec.configure do |c|
-  #       # context.example is deprecated, but RSpec.current_example is not
-  #       # available until RSpec 3.0.
-  #       fetch_current_example = RSpec.respond_to?(:current_example) ?
-  #         proc { RSpec.current_example } : proc { |context| context.example }
-  #
-  #       c.before(:example) do
-  #         example = fetch_current_example.call(self)
-  #
-  #         # ...
-  #       end
-  #     end
-  #
+  # to the example currently being executed.
   def self.current_example
-    thread_local_metadata[:current_example]
+    RSpec::Support.thread_local_data[:current_example]
   end
 
   # Set the current example being executed.
   # @api private
   def self.current_example=(example)
-    thread_local_metadata[:current_example] = example
-  end
-
-  # @private
-  # A single thread local variable so we don't excessively pollute that
-  # namespace.
-  def self.thread_local_metadata
-    Thread.current[:_rspec] ||= { :shared_example_group_inclusions => [] }
+    RSpec::Support.thread_local_data[:current_example] = example
   end
 
   # @private
@@ -141,6 +119,10 @@ module RSpec
 
   # Namespace for the rspec-core code.
   module Core
+    autoload :ExampleStatusPersister, "rspec/core/example_status_persister"
+    autoload :Profiler,               "rspec/core/profiler"
+    autoload :DidYouMean,             "rspec/core/did_you_mean"
+
     # @private
     # This avoids issues with reporting time caused by examples that
     # change the value/meaning of Time.now without properly restoring

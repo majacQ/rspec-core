@@ -1,4 +1,3 @@
-require "spec_helper"
 require "rspec/core/rake_task"
 require 'tempfile'
 
@@ -24,12 +23,12 @@ module RSpec::Core
 
     context "with args passed to the rake task" do
       it "correctly passes along task arguments" do
-        task = RakeTask.new(:rake_task_args, :files) do |t, args|
+        the_task = RakeTask.new(:rake_task_args, :files) do |t, args|
           expect(args[:files]).to eq "first_spec.rb"
         end
 
-        expect(task).to receive(:run_task) { true }
-        expect(Rake.application.invoke_task("rake_task_args[first_spec.rb]")).to be_truthy
+        expect(the_task).to receive(:run_task) { true }
+        Rake.application.invoke_task("rake_task_args[first_spec.rb]")
       end
     end
 
@@ -37,14 +36,28 @@ module RSpec::Core
 
     context "default" do
       it "renders rspec" do
-        expect(spec_command).to match(/^#{ruby} #{default_load_path_opts} #{task.rspec_path}/)
+        expect(spec_command).to match(/^#{ruby} #{default_load_path_opts} '?#{task.rspec_path}'?/)
+      end
+    end
+
+    context "with space", :skip => RSpec::Support::OS.windows? do
+      it "renders rspec with space escaped" do
+        task.rspec_path = '/path with space/exe/rspec'
+        expect(spec_command).to match(/^#{ruby} #{default_load_path_opts} \/path\\ with\\ space\/exe\/rspec/)
+      end
+    end
+
+    context "on windows, with a quote in the name", :skip => !RSpec::Support::OS.windows? do
+      it "renders rspec quoted, with quote escaped" do
+        task.rspec_path = "/foo'bar/exe/rspec"
+        expect(spec_command).to include(%q|'/foo\'bar/exe/rspec'|)
       end
     end
 
     context "with ruby options" do
       it "renders them before the rspec path" do
         task.ruby_opts = "-w"
-        expect(spec_command).to match(/^#{ruby} -w #{default_load_path_opts} #{task.rspec_path}/)
+        expect(spec_command).to match(/^#{ruby} -w #{default_load_path_opts} '?#{task.rspec_path}'?/)
       end
     end
 
@@ -52,6 +65,22 @@ module RSpec::Core
       it "adds the rspec_opts" do
         task.rspec_opts = "-Ifoo"
         expect(spec_command).to match(/#{task.rspec_path}.*-Ifoo/)
+      end
+
+      it "doesn't add a default pattern that would override CLI configuration from files" do
+        expect(spec_command).to exclude("--pattern")
+      end
+
+      it 'only uses the pattern passed via rspec_opts' do
+        task.rspec_opts = "--pattern some_specs"
+        expect(spec_command).to include("--pattern some_specs")
+        expect(spec_command).to include("--pattern").once
+      end
+
+      it 'behaves properly if rspec_opts is an array' do
+        task.rspec_opts = %w[--pattern some_specs]
+        expect(spec_command).to include("--pattern some_specs")
+        expect(spec_command).to include("--pattern").once
       end
     end
 
@@ -61,9 +90,26 @@ module RSpec::Core
         expect(spec_command).to match(/ --pattern '?complex_pattern'?/)
       end
 
-      it "shellescapes the pattern as necessary", :unless => RSpec::Support::OS.windows? do
+      it "shellescapes the pattern as necessary", :skip => RSpec::Support::OS.windows? do
         task.pattern = "foo'bar"
         expect(spec_command).to include(" --pattern foo\\'bar")
+      end
+    end
+
+    context "when `failure_message` is configured" do
+      before do
+        allow(task).to receive(:exit)
+        task.failure_message = "Bad news"
+      end
+
+      it 'prints it if the RSpec run failed' do
+        task.ruby_opts = '-e "exit(1);" ;#'
+        expect { task.run_task false }.to output(/Bad news/).to_stdout
+      end
+
+      it 'does not print it if the RSpec run succeeded' do
+        task.ruby_opts = '-e "exit(0);" ;#'
+        expect { task.run_task false }.not_to output(/Bad/).to_stdout
       end
     end
 
@@ -111,6 +157,24 @@ module RSpec::Core
       end
     end
 
+    context "with_clean_environment is set" do
+      it "removes the environment variables", :skip => RSpec::Support::Ruby.jruby? do
+        with_env_vars 'MY_ENV' => 'ABC' do
+          if RSpec::Support::OS.windows?
+            essential_shell_variables = /\["ANSICON", "ANSICON_DEF", "HOME", "TMPDIR", "USER"\]/
+          else
+            essential_shell_variables = /\["PWD"(?:, "SHLVL")?(?:, "_")?(?:, "__CF_USER_TEXT_ENCODING")?\]/
+          end
+
+          expect {
+            task.with_clean_environment = true
+            task.ruby_opts = '-e "puts \"Environment: #{ENV.keys.sort.inspect}\""'
+            task.run_task false
+          }.to avoid_outputting.to_stderr.and output(essential_shell_variables).to_stdout_from_any_process
+        end
+      end
+    end
+
     def loaded_files
       args = Shellwords.split(spec_command)
       args -= [task.class::RUBY, "-S", task.rspec_path]
@@ -137,7 +201,7 @@ module RSpec::Core
     context "with SPEC env var set" do
       it "sets files to run" do
         with_env_vars 'SPEC' => 'path/to/file' do
-          expect(loaded_files).to eq(["path/to/file"])
+          expect(loaded_files).to contain_files("path/to/file")
         end
       end
 
@@ -151,6 +215,12 @@ module RSpec::Core
     describe "load path manipulation" do
       def self.it_configures_rspec_load_path(description, path_template)
         context "when rspec is installed as #{description}" do
+          # Matchers are lazily loaded via `autoload`, so we need to get the matcher before
+          # the load path is manipulated, so we're using `let!` here to do that.
+          let!(:include_expected_load_path_option) do
+            match(/ -I'?#{path_template % "rspec-core"}'?#{File::PATH_SEPARATOR}'?#{path_template % "rspec-support"}'? /)
+          end
+
           it "adds the current rspec-core and rspec-support dirs to the load path to ensure the current version is used" do
             $LOAD_PATH.replace([
               path_template % "rspec-core",
@@ -160,7 +230,7 @@ module RSpec::Core
               path_template % "rake"
             ])
 
-            expect(spec_command).to match(/ -I'?#{path_template % "rspec-core"}'?#{File::PATH_SEPARATOR}'?#{path_template % "rspec-support"}'? /)
+            expect(spec_command).to include_expected_load_path_option
           end
 
           it "avoids adding the same load path entries twice" do
@@ -171,7 +241,7 @@ module RSpec::Core
               path_template % "rspec-support"
             ])
 
-            expect(spec_command).to match(/ -I'?#{path_template % "rspec-core"}'?#{File::PATH_SEPARATOR}'?#{path_template % "rspec-support"}'? /)
+            expect(spec_command).to include_expected_load_path_option
           end
         end
       end
@@ -186,22 +256,25 @@ module RSpec::Core
         "/Users/myron/.gem/ruby/1.9.3/gems/%s-3.1.0.beta1/lib"
 
       it "does not include extra load path entries for other gems that have `rspec-core` in its path" do
+        # matchers are lazily loaded with autoload, so we need to get the matcher before manipulating the load path.
+        include_extra_load_path_entries = include("simplecov", "minitest", "rspec-core/spec")
+
         # these are items on my load path due to `bundle install --standalone`,
         # and my initial logic caused all these to be included in the `-I` option.
         $LOAD_PATH.replace([
-           "/Users/myron/code/rspec-dev/repos/rspec-core/spec",
-           "/Users/myron/code/rspec-dev/repos/rspec-core/bundle/ruby/1.9.1/gems/simplecov-0.8.2/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-core/bundle/ruby/1.9.1/gems/simplecov-html-0.8.0/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-core/bundle/ruby/1.9.1/gems/minitest-5.3.3/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-mocks/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-core/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-expectations/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-support/lib",
-           "/Users/myron/code/rspec-dev/repos/rspec-core/bundle",
+           "/Users/user/code/rspec-dev/repos/rspec-core/spec",
+           "/Users/user/code/rspec-dev/repos/rspec-core/bundle/ruby/1.9.1/gems/simplecov-0.8.2/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-core/bundle/ruby/1.9.1/gems/simplecov-html-0.8.0/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-core/bundle/ruby/1.9.1/gems/minitest-5.3.3/lib",
+           "/Users/user/code/rspec-dev/repos/rspec/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-mocks/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-core/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-expectations/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-support/lib",
+           "/Users/user/code/rspec-dev/repos/rspec-core/bundle",
         ])
 
-        expect(spec_command).not_to include("simplecov", "minitest", "rspec-core/spec")
+        expect(spec_command).not_to include_extra_load_path_entries
       end
     end
 
@@ -233,9 +306,7 @@ module RSpec::Core
       end
 
       context "that is an absolute path file glob" do
-        it "loads the matching spec files", :failing_on_appveyor,
-        :pending => false,
-        :skip => (ENV['APPVEYOR'] ? "Failing on AppVeyor but :pending isn't working for some reason" : false) do
+        it "loads the matching spec files" do
           dir = File.expand_path("../resources", __FILE__)
           task.pattern = File.join(dir, "**/*_spec.rb")
 
@@ -307,7 +378,7 @@ module RSpec::Core
         it "loads the files from the FileList" do
           task.pattern = FileList["spec/rspec/core/resources/**/*_spec.rb"]
 
-          expect(loaded_files).to contain_exactly(
+          expect(loaded_files).to contain_files(
             "spec/rspec/core/resources/a_spec.rb",
             "spec/rspec/core/resources/acceptance/foo_spec.rb"
           )
@@ -344,7 +415,7 @@ module RSpec::Core
         make_files_in_dir "acceptance"
       end
 
-      it "shellescapes the pattern as necessary", :unless => RSpec::Support::OS.windows? do
+      it "shellescapes the pattern as necessary", :skip => RSpec::Support::OS.windows? do
         task.exclude_pattern = "foo'bar"
         expect(spec_command).to include(" --exclude-pattern foo\\'bar")
       end
@@ -368,7 +439,7 @@ module RSpec::Core
     context "with paths with quotes or spaces" do
       include_context "isolated directory"
 
-      it "matches files with quotes and spaces", :failing_on_appveyor do
+      it "matches files with quotes and spaces", :failing_on_windows_ci do
         spec_dir = File.join(Dir.getwd, "spec")
         task.pattern = "spec/*spec.rb"
         FileUtils.mkdir_p(spec_dir)

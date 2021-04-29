@@ -33,10 +33,10 @@ module RSpec
             "<span class='duration'>#{formatted_run_time}s</span></dd>"
         end
 
-        # rubocop:disable Style/ParameterLists
+        # rubocop:disable Metrics/ParameterLists
         def print_example_failed(pending_fixed, description, run_time, failure_id,
-                                 exception, extra_content, escape_backtrace=false)
-          # rubocop:enable Style/ParameterLists
+                                 exception, extra_content)
+          # rubocop:enable Metrics/ParameterLists
           formatted_run_time = "%.5f" % run_time
 
           @output.puts "    <dd class=\"example #{pending_fixed ? 'pending_fixed' : 'failed'}\">"
@@ -45,11 +45,7 @@ module RSpec
           @output.puts "      <div class=\"failure\" id=\"failure_#{failure_id}\">"
           if exception
             @output.puts "        <div class=\"message\"><pre>#{h(exception[:message])}</pre></div>"
-            if escape_backtrace
-              @output.puts "        <div class=\"backtrace\"><pre>#{h exception[:backtrace]}</pre></div>"
-            else
-              @output.puts "        <div class=\"backtrace\"><pre>#{exception[:backtrace]}</pre></div>"
-            end
+            @output.puts "        <div class=\"backtrace\"><pre>#{h exception[:backtrace]}</pre></div>"
           end
           @output.puts extra_content if extra_content
           @output.puts "      </div>"
@@ -63,7 +59,9 @@ module RSpec
         end
 
         def print_summary(duration, example_count, failure_count, pending_count)
-          totals =  "#{example_count} example#{'s' unless example_count == 1}, "
+          totals = String.new(
+            "#{example_count} example#{'s' unless example_count == 1}, "
+          )
           totals << "#{failure_count} failure#{'s' unless failure_count == 1}"
           totals << ", #{pending_count} pending" if pending_count > 0
 
@@ -117,7 +115,6 @@ module RSpec
           "style=\"margin-left: #{(number_of_parents - 1) * 15}px;\""
         end
 
-        # rubocop:disable LineLength
         REPORT_HEADER = <<-EOF
 <div class="rspec-report">
 
@@ -141,9 +138,7 @@ module RSpec
 
 <div class="results">
 EOF
-        # rubocop:enable LineLength
 
-        # rubocop:disable LineLength
         GLOBAL_SCRIPTS = <<-EOF
 
 function addClass(element_id, classname) {

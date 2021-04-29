@@ -2,10 +2,12 @@ RSpec::Support.require_rspec_support 'recursive_const_methods'
 
 module RSpec
   module Core
+    # rubocop:disable Metrics/ClassLength
+
     # ExampleGroup and {Example} are the main structural elements of
     # rspec-core. Consider this example:
     #
-    #     describe Thing do
+    #     RSpec.describe Thing do
     #       it "does something" do
     #       end
     #     end
@@ -32,10 +34,13 @@ module RSpec
       include Pending
       extend SharedExampleGroup
 
-      unless respond_to?(:define_singleton_method)
-        # @private
-        def self.define_singleton_method(*a, &b)
-          (class << self; self; end).__send__(:define_method, *a, &b)
+      # Define a singleton method for the singleton class (remove the method if
+      # it's already been defined).
+      # @private
+      def self.idempotently_define_singleton_method(name, &definition)
+        (class << self; self; end).module_exec do
+          remove_method(name) if method_defined?(name) && instance_method(name).owner == self
+          define_method(name, &definition)
         end
       end
 
@@ -44,7 +49,21 @@ module RSpec
       # The [Metadata](Metadata) object associated with this group.
       # @see Metadata
       def self.metadata
-        @metadata if defined?(@metadata)
+        @metadata ||= nil
+      end
+
+      # Temporarily replace the provided metadata.
+      # Intended primarily to allow an example group's singleton class
+      # to return the metadata of the example that it exists for. This
+      # is necessary for shared example group inclusion to work properly
+      # with singleton example groups.
+      # @private
+      def self.with_replaced_metadata(meta)
+        orig_metadata = metadata
+        @metadata = meta
+        yield
+      ensure
+        @metadata = orig_metadata
       end
 
       # @private
@@ -56,7 +75,7 @@ module RSpec
       # @private
       def self.delegate_to_metadata(*names)
         names.each do |name|
-          define_singleton_method(name) { metadata.fetch(name) }
+          idempotently_define_singleton_method(name) { metadata.fetch(name) }
         end
       end
 
@@ -71,7 +90,7 @@ module RSpec
       # Returns the class or module passed to the `describe` method (or alias).
       # Returns nil if the subject is not a class or module.
       # @example
-      #     describe Thing do
+      #     RSpec.describe Thing do
       #       it "does something" do
       #         described_class == Thing
       #       end
@@ -88,19 +107,18 @@ module RSpec
       # @private
       # @macro [attach] define_example_method
       #   @!scope class
+      #   @method $1
       #   @overload $1
       #   @overload $1(&example_implementation)
       #     @param example_implementation [Block] The implementation of the example.
-      #   @overload $1(doc_string, *metadata_keys, metadata={})
+      #   @overload $1(doc_string, *metadata)
       #     @param doc_string [String] The example's doc string.
-      #     @param metadata [Hash] Metadata for the example.
-      #     @param metadata_keys [Array<Symbol>] Metadata tags for the example.
-      #       Will be transformed into hash entries with `true` values.
-      #   @overload $1(doc_string, *metadata_keys, metadata={}, &example_implementation)
+      #     @param metadata [Array<Symbol>, Hash] Metadata for the example.
+      #       Symbols will be transformed into hash entries with `true` values.
+      #   @overload $1(doc_string, *metadata, &example_implementation)
       #     @param doc_string [String] The example's doc string.
-      #     @param metadata [Hash] Metadata for the example.
-      #     @param metadata_keys [Array<Symbol>] Metadata tags for the example.
-      #       Will be transformed into hash entries with `true` values.
+      #     @param metadata [Array<Symbol>, Hash] Metadata for the example.
+      #       Symbols will be transformed into hash entries with `true` values.
       #     @param example_implementation [Block] The implementation of the example.
       #   @yield [Example] the example object
       #   @example
@@ -119,16 +137,20 @@ module RSpec
       #     $1 "does something" do |ex|
       #       # ex is the Example object that contains metadata about the example
       #     end
+      #
+      #  @example
+      #     $1 "does something", :slow, :load_factor => 100 do
+      #     end
+      #
       def self.define_example_method(name, extra_options={})
-        define_singleton_method(name) do |*all_args, &block|
+        idempotently_define_singleton_method(name) do |*all_args, &block|
           desc, *args = *all_args
 
           options = Metadata.build_hash_from(args)
           options.update(:skip => RSpec::Core::Pending::NOT_YET_IMPLEMENTED) unless block
           options.update(extra_options)
 
-          examples << RSpec::Core::Example.new(self, desc, options, block)
-          examples.last
+          RSpec::Core::Example.new(self, desc, options, block)
         end
       end
 
@@ -185,11 +207,10 @@ module RSpec
       #   @overload $1
       #   @overload $1(&example_group_definition)
       #     @param example_group_definition [Block] The definition of the example group.
-      #   @overload $1(doc_string, *metadata_keys, metadata={}, &example_implementation)
+      #   @overload $1(doc_string, *metadata, &example_implementation)
       #     @param doc_string [String] The group's doc string.
-      #     @param metadata [Hash] Metadata for the group.
-      #     @param metadata_keys [Array<Symbol>] Metadata tags for the group.
-      #       Will be transformed into hash entries with `true` values.
+      #     @param metadata [Array<Symbol>, Hash] Metadata for the group.
+      #       Symbols will be transformed into hash entries with `true` values.
       #     @param example_group_definition [Block] The definition of the example group.
       #
       #   Generates a subclass of this example group which inherits
@@ -204,41 +225,50 @@ module RSpec
       #         do_something_before
       #       end
       #
+      #       before(:example, :clean_env) do
+      #         env.clear!
+      #       end
+      #
       #       let(:thing) { Thing.new }
       #
       #       $1 "attribute (of something)" do
       #         # examples in the group get the before hook
       #         # declared above, and can access `thing`
       #       end
+      #
+      #       $1 "needs additional setup", :clean_env, :implementation => JSON do
+      #         # specifies that hooks with matching metadata
+      #         # should be be run additionally
+      #       end
       #     end
       #
       # @see DSL#describe
       def self.define_example_group_method(name, metadata={})
-        define_singleton_method(name) do |*args, &example_group_block|
-          thread_data = RSpec.thread_local_metadata
+        idempotently_define_singleton_method(name) do |*args, &example_group_block|
+          thread_data = RSpec::Support.thread_local_data
           top_level   = self == ExampleGroup
 
-          if top_level
-            if thread_data[:in_example_group]
-              raise "Creating an isolated context from within a context is " \
-                    "not allowed. Change `RSpec.#{name}` to `#{name}` or " \
-                    "move this to a top-level scope."
+          registration_collection =
+            if top_level
+              if thread_data[:in_example_group]
+                raise "Creating an isolated context from within a context is " \
+                      "not allowed. Change `RSpec.#{name}` to `#{name}` or " \
+                      "move this to a top-level scope."
+              end
+
+              thread_data[:in_example_group] = true
+              RSpec.world.example_groups
+            else
+              children
             end
 
-            thread_data[:in_example_group] = true
-          end
-
           begin
-
             description = args.shift
             combined_metadata = metadata.dup
             combined_metadata.merge!(args.pop) if args.last.is_a? Hash
             args << combined_metadata
 
-            subclass(self, description, args, &example_group_block).tap do |child|
-              children << child
-            end
-
+            subclass(self, description, args, registration_collection, &example_group_block)
           ensure
             thread_data.delete(:in_example_group) if top_level
           end
@@ -284,8 +314,8 @@ module RSpec
       #   @!scope class
       #
       #   @see SharedExampleGroup
-      def self.define_nested_shared_group_method(new_name, report_label="it should behave like")
-        define_singleton_method(new_name) do |name, *args, &customization_block|
+      def self.define_nested_shared_group_method(new_name, report_label="behaves like")
+        idempotently_define_singleton_method(new_name) do |name, *args, &customization_block|
           # Pass :caller so the :location metadata is set properly.
           # Otherwise, it'll be set to the next line because that's
           # the block's source_location.
@@ -299,10 +329,7 @@ module RSpec
 
       # Generates a nested example group and includes the shared content
       # mapped to `name` in the nested group.
-      define_nested_shared_group_method :it_behaves_like, "behaves like"
-      # Generates a nested example group and includes the shared content
-      # mapped to `name` in the nested group.
-      define_nested_shared_group_method :it_should_behave_like
+      define_nested_shared_group_method :it_behaves_like
 
       # Includes shared content mapped to `name` directly in the group in which
       # it is declared, as opposed to `it_behaves_like`, which creates a nested
@@ -324,27 +351,47 @@ module RSpec
         find_and_eval_shared("examples", name, caller.first, *args, &block)
       end
 
+      # Clear memoized values when adding/removing examples
+      # @private
+      def self.reset_memoized
+        @descendant_filtered_examples = nil
+        @_descendants = nil
+        @parent_groups = nil
+        @declaration_locations = nil
+      end
+
+      # Adds an example to the example group
+      def self.add_example(example)
+        reset_memoized
+        examples << example
+      end
+
+      # Removes an example from the example group
+      def self.remove_example(example)
+        reset_memoized
+        examples.delete example
+      end
+
       # @private
       def self.find_and_eval_shared(label, name, inclusion_location, *args, &customization_block)
-        shared_block = RSpec.world.shared_example_group_registry.find(parent_groups, name)
+        shared_module = RSpec.world.shared_example_group_registry.find(parent_groups, name)
 
-        unless shared_block
+        unless shared_module
           raise ArgumentError, "Could not find shared #{label} #{name.inspect}"
         end
 
-        SharedExampleGroupInclusionStackFrame.with_frame(name, inclusion_location) do
-          module_exec(*args, &shared_block)
-          module_exec(&customization_block) if customization_block
-        end
+        shared_module.include_in(
+          self, Metadata.relative_path(inclusion_location),
+          args, customization_block
+        )
       end
 
       # @!endgroup
 
       # @private
-      def self.subclass(parent, description, args, &example_group_block)
+      def self.subclass(parent, description, args, registration_collection, &example_group_block)
         subclass = Class.new(parent)
-        subclass.set_it_up(description, *args, &example_group_block)
-        ExampleGroups.assign_const(subclass)
+        subclass.set_it_up(description, args, registration_collection, &example_group_block)
         subclass.module_exec(&example_group_block) if example_group_block
 
         # The LetDefinitions module must be included _after_ other modules
@@ -357,7 +404,7 @@ module RSpec
       end
 
       # @private
-      def self.set_it_up(*args, &example_group_block)
+      def self.set_it_up(description, args, registration_collection, &example_group_block)
         # Ruby 1.9 has a bug that can lead to infinite recursion and a
         # SystemStackError if you include a module in a superclass after
         # including it in a subclass: https://gist.github.com/845896
@@ -368,16 +415,32 @@ module RSpec
         # here.
         ensure_example_groups_are_configured
 
-        description = args.shift
-        user_metadata = Metadata.build_hash_from(args)
-        args.unshift(description)
+        # Register the example with the group before creating the metadata hash.
+        # This is necessary since creating the metadata hash triggers
+        # `when_first_matching_example_defined` callbacks, in which users can
+        # load RSpec support code which defines hooks. For that to work, the
+        # examples and example groups must be registered at the time the
+        # support code is called or be defined afterwards.
+        # Begin defined beforehand but registered afterwards causes hooks to
+        # not be applied where they should.
+        registration_collection << self
+
+        @user_metadata = Metadata.build_hash_from(args)
 
         @metadata = Metadata::ExampleGroupHash.create(
-          superclass_metadata, user_metadata, *args, &example_group_block
+          superclass_metadata, @user_metadata,
+          superclass.method(:next_runnable_index_for),
+          description, *args, &example_group_block
         )
 
-        hooks.register_globals(self, RSpec.configuration.hooks)
-        RSpec.world.configure_group(self)
+        config = RSpec.configuration
+        config.apply_derived_metadata_to(@metadata)
+
+        ExampleGroups.assign_const(self)
+
+        @currently_executing_a_context_hook = false
+
+        config.configure_group(self)
       end
 
       # @private
@@ -393,7 +456,7 @@ module RSpec
       # @private
       def self.descendant_filtered_examples
         @descendant_filtered_examples ||= filtered_examples +
-          children.inject([]) { |a, e| a + e.descendant_filtered_examples }
+          children.flat_map(&:descendant_filtered_examples)
       end
 
       # @private
@@ -402,8 +465,40 @@ module RSpec
       end
 
       # @private
+      # Traverses the tree of groups, starting with `self`, then the children, recursively.
+      # Halts the traversal of a branch of the tree as soon as the passed block returns true.
+      # Note that siblings groups and their sub-trees will continue to be explored.
+      # This is intended to make it easy to find the top-most group that satisfies some
+      # condition.
+      def self.traverse_tree_until(&block)
+        return if yield self
+
+        children.each do |child|
+          child.traverse_tree_until(&block)
+        end
+      end
+
+      # @private
+      def self.next_runnable_index_for(file)
+        if self == ExampleGroup
+          # We add 1 so the ids start at 1 instead of 0. This is
+          # necessary for this branch (but not for the other one)
+          # because we register examples and groups with the
+          # `children` and `examples` collection BEFORE this
+          # method is called as part of metadata hash creation,
+          # but the example group is recorded with
+          # `RSpec.world.example_group_counts_by_spec_file` AFTER
+          # the metadata hash is created and the group is returned
+          # to the caller.
+          RSpec.world.num_example_groups_defined_in(file) + 1
+        else
+          children.count + examples.count
+        end
+      end
+
+      # @private
       def self.descendants
-        @_descendants ||= [self] + children.inject([]) { |a, e| a + e.descendants }
+        @_descendants ||= [self] + children.flat_map(&:descendants)
       end
 
       ## @private
@@ -413,7 +508,7 @@ module RSpec
 
       # @private
       def self.top_level?
-        @top_level ||= superclass == ExampleGroup
+        superclass == ExampleGroup
       end
 
       # @private
@@ -434,58 +529,70 @@ module RSpec
 
       # @private
       def self.store_before_context_ivars(example_group_instance)
-        instance_variables_for_example(example_group_instance).each do |ivar|
+        each_instance_variable_for_example(example_group_instance) do |ivar|
           before_context_ivars[ivar] = example_group_instance.instance_variable_get(ivar)
         end
       end
 
+      # Returns true if a `before(:context)` or `after(:context)`
+      # hook is currently executing.
+      def self.currently_executing_a_context_hook?
+        @currently_executing_a_context_hook
+      end
+
       # @private
       def self.run_before_context_hooks(example_group_instance)
-        return if descendant_filtered_examples.empty?
-        begin
-          set_ivars(example_group_instance, superclass.before_context_ivars)
+        set_ivars(example_group_instance, superclass_before_context_ivars)
 
-          ContextHookMemoizedHash::Before.isolate_for_context_hook(example_group_instance) do
-            hooks.run(:before, :context, example_group_instance)
-          end
-        ensure
-          store_before_context_ivars(example_group_instance)
+        @currently_executing_a_context_hook = true
+
+        ContextHookMemoized::Before.isolate_for_context_hook(example_group_instance) do
+          hooks.run(:before, :context, example_group_instance)
         end
+      ensure
+        store_before_context_ivars(example_group_instance)
+        @currently_executing_a_context_hook = false
+      end
+
+      # @private
+      def self.superclass_before_context_ivars
+        superclass.before_context_ivars
       end
 
       # @private
       def self.run_after_context_hooks(example_group_instance)
-        return if descendant_filtered_examples.empty?
         set_ivars(example_group_instance, before_context_ivars)
 
-        ContextHookMemoizedHash::After.isolate_for_context_hook(example_group_instance) do
+        @currently_executing_a_context_hook = true
+
+        ContextHookMemoized::After.isolate_for_context_hook(example_group_instance) do
           hooks.run(:after, :context, example_group_instance)
         end
+      ensure
+        before_context_ivars.clear
+        @currently_executing_a_context_hook = false
       end
 
       # Runs all the examples in this group.
-      def self.run(reporter)
-        if RSpec.world.wants_to_quit
-          RSpec.world.clear_remaining_example_groups if top_level?
-          return
-        end
+      def self.run(reporter=RSpec::Core::NullReporter)
+        return if RSpec.world.wants_to_quit
         reporter.example_group_started(self)
 
+        should_run_context_hooks = descendant_filtered_examples.any?
         begin
-          instance = new('before(:context) hook')
-          run_before_context_hooks(instance)
+          run_before_context_hooks(new('before(:context) hook')) if should_run_context_hooks
           result_for_this_group = run_examples(reporter)
           results_for_descendants = ordering_strategy.order(children).map { |child| child.run(reporter) }.all?
           result_for_this_group && results_for_descendants
         rescue Pending::SkipDeclaredInExample => ex
           for_filtered_examples(reporter) { |example| example.skip_with_exception(reporter, ex) }
-        rescue Exception => ex
-          RSpec.world.wants_to_quit = true if fail_fast?
+          true
+        rescue Support::AllExceptionsExceptOnesWeMustNotRescue => ex
           for_filtered_examples(reporter) { |example| example.fail_with_exception(reporter, ex) }
+          RSpec.world.wants_to_quit = true if reporter.fail_fast_limit_met?
+          false
         ensure
-          instance = new('after(:context) hook')
-          run_after_context_hooks(instance)
-          before_context_ivars.clear
+          run_after_context_hooks(new('after(:context) hook')) if should_run_context_hooks
           reporter.example_group_finished(self)
         end
       end
@@ -513,7 +620,9 @@ module RSpec
           instance = new(example.inspect_output)
           set_ivars(instance, before_context_ivars)
           succeeded = example.run(instance, reporter)
-          RSpec.world.wants_to_quit = true if fail_fast? && !succeeded
+          if !succeeded && reporter.fail_fast_limit_met?
+            RSpec.world.wants_to_quit = true
+          end
           succeeded
         end.all?
       end
@@ -531,25 +640,16 @@ module RSpec
       end
 
       # @private
-      def self.fail_fast?
-        RSpec.configuration.fail_fast?
+      def self.declaration_locations
+        @declaration_locations ||= [Metadata.location_tuple_from(metadata)] +
+          examples.map { |e| Metadata.location_tuple_from(e.metadata) } +
+          children.flat_map(&:declaration_locations)
       end
 
-      # @private
-      def self.any_apply?(filters)
-        MetadataFilter.any_apply?(filters, metadata)
-      end
-
-      # @private
-      def self.all_apply?(filters)
-        MetadataFilter.all_apply?(filters, metadata)
-      end
-
-      # @private
-      def self.declaration_line_numbers
-        @declaration_line_numbers ||= [metadata[:line_number]] +
-          examples.map { |e| e.metadata[:line_number] } +
-          children.inject([]) { |a, e| a + e.declaration_line_numbers }
+      # @return [String] the unique id of this example group. Pass
+      #   this at the command line to re-run this exact example group.
+      def self.id
+        Metadata.id_from(metadata)
       end
 
       # @private
@@ -562,27 +662,69 @@ module RSpec
         ivars.each { |name, value| instance.instance_variable_set(name, value) }
       end
 
-      if RUBY_VERSION.to_f < 1.9
-        # @private
-        def self.instance_variables_for_example(group)
-          group.instance_variables - ['@__inspect_output']
-        end
-      else
-        # @private
-        def self.instance_variables_for_example(group)
-          group.instance_variables - [:@__inspect_output]
+      # @private
+      def self.each_instance_variable_for_example(group)
+        group.instance_variables.each do |ivar|
+          yield ivar unless ivar == :@__inspect_output
         end
       end
 
       def initialize(inspect_output=nil)
         @__inspect_output = inspect_output || '(no description provided)'
+        super() # no args get passed
       end
 
       # @private
       def inspect
         "#<#{self.class} #{@__inspect_output}>"
       end
+
+      # @private
+      def self.update_inherited_metadata(updates)
+        metadata.update(updates) do |key, existing_group_value, new_inherited_value|
+          @user_metadata.key?(key) ? existing_group_value : new_inherited_value
+        end
+
+        RSpec.configuration.configure_group(self)
+        examples.each { |ex| ex.update_inherited_metadata(updates) }
+        children.each { |group| group.update_inherited_metadata(updates) }
+      end
+
+      # Raised when an RSpec API is called in the wrong scope, such as `before`
+      # being called from within an example rather than from within an example
+      # group block.
+      WrongScopeError = Class.new(NoMethodError)
+
+      def self.method_missing(name, *args)
+        if method_defined?(name)
+          raise WrongScopeError,
+                "`#{name}` is not available on an example group (e.g. a " \
+                "`describe` or `context` block). It is only available from " \
+                "within individual examples (e.g. `it` blocks) or from " \
+                "constructs that run in the scope of an example (e.g. " \
+                "`before`, `let`, etc)."
+        end
+
+        super
+      end
+      private_class_method :method_missing
+
+    private
+
+      def method_missing(name, *args)
+        if self.class.respond_to?(name)
+          raise WrongScopeError,
+                "`#{name}` is not available from within an example (e.g. an " \
+                "`it` block) or from constructs that run in the scope of an " \
+                "example (e.g. `before`, `let`, etc). It is only available " \
+                "on an example group (e.g. a `describe` or `context` block)."
+        end
+
+        super(name, *args)
+      end
+      ruby2_keywords :method_missing if respond_to?(:ruby2_keywords, true)
     end
+    # rubocop:enable Metrics/ClassLength
 
     # @private
     # Unnamed example group used by `SuiteHookContext`.
@@ -622,16 +764,25 @@ module RSpec
 
       # @private
       def self.current_backtrace
-        RSpec.thread_local_metadata[:shared_example_group_inclusions].reverse
+        shared_example_group_inclusions.reverse
       end
 
       # @private
       def self.with_frame(name, location)
-        current_stack = RSpec.thread_local_metadata[:shared_example_group_inclusions]
-        current_stack << new(name, location)
-        yield
+        current_stack = shared_example_group_inclusions
+        if current_stack.any? { |frame| frame.shared_group_name == name }
+          raise ArgumentError, "can't include shared examples recursively"
+        else
+          current_stack << new(name, location)
+          yield
+        end
       ensure
         current_stack.pop
+      end
+
+      # @private
+      def self.shared_example_group_inclusions
+        RSpec::Support.thread_local_data[:shared_example_group_inclusions] ||= []
       end
     end
   end
@@ -657,31 +808,31 @@ module RSpec
       const_scope
     end
 
+    def self.remove_all_constants
+      constants.each do |constant|
+        __send__(:remove_const, constant)
+      end
+    end
+
     def self.base_name_for(group)
-      return "Anonymous" if group.description.empty?
+      return "Anonymous".dup if group.description.empty?
 
       # Convert to CamelCase.
       name = ' ' + group.description
-      name.gsub!(/[^0-9a-zA-Z]+([0-9a-zA-Z])/) { Regexp.last_match[1].upcase }
+      name.gsub!(/[^0-9a-zA-Z]+([0-9a-zA-Z])/) do
+        match = ::Regexp.last_match[1]
+        match.upcase!
+        match
+      end
 
-      name.lstrip!         # Remove leading whitespace
-      name.gsub!(/\W/, '') # JRuby, RBX and others don't like non-ascii in const names
+      name.lstrip!                # Remove leading whitespace
+      name.gsub!(/\W/, ''.freeze) # JRuby, RBX and others don't like non-ascii in const names
 
       # Ruby requires first const letter to be A-Z. Use `Nested`
       # as necessary to enforce that.
-      name.gsub!(/\A([^A-Z]|\z)/, 'Nested\1')
+      name.gsub!(/\A([^A-Z]|\z)/, 'Nested\1'.freeze)
 
       name
-    end
-
-    if RUBY_VERSION == '1.9.2'
-      class << self
-        alias _base_name_for base_name_for
-        def base_name_for(group)
-          _base_name_for(group) + '_'
-        end
-      end
-      private_class_method :_base_name_for
     end
 
     def self.disambiguate(name, const_scope)

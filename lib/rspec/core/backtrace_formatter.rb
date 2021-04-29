@@ -8,7 +8,7 @@ module RSpec
       def initialize
         @full_backtrace = false
 
-        patterns = %w[ /lib\d*/ruby/ bin/ exe/rspec ]
+        patterns = %w[ /lib\d*/ruby/ bin/ exe/rspec /lib/bundler/ /exe/bundle: ]
         patterns << "org/jruby/" if RUBY_PLATFORM == 'java'
         patterns.map! { |s| Regexp.new(s.gsub("/", File::SEPARATOR)) }
 
@@ -31,7 +31,8 @@ module RSpec
       end
 
       def format_backtrace(backtrace, options={})
-        return backtrace if options[:full_backtrace]
+        return [] unless backtrace
+        return backtrace if options[:full_backtrace] || backtrace.empty?
 
         backtrace.map { |l| backtrace_line(l) }.compact.
           tap do |filtered|
@@ -47,8 +48,6 @@ module RSpec
 
       def backtrace_line(line)
         Metadata.relative_path(line) unless exclude?(line)
-      rescue SecurityError
-        nil
       end
 
       def exclude?(line)

@@ -1,7 +1,6 @@
-require "spec_helper"
 require 'rspec/core/drb'
 
-RSpec.describe RSpec::Core::DRbRunner, :isolated_directory => true, :isolated_home => true, :type => :drb, :unless => RUBY_PLATFORM == 'java' do
+RSpec.describe RSpec::Core::DRbRunner, :isolated_directory => true, :isolated_home => true, :type => :drb, :skip => RUBY_PLATFORM == 'java' do
   let(:config) { RSpec::Core::Configuration.new }
   let(:out)    { StringIO.new }
   let(:err)    { StringIO.new }
@@ -75,12 +74,20 @@ RSpec.describe RSpec::Core::DRbRunner, :isolated_directory => true, :isolated_ho
 
     before(:all) do
       @drb_port = '8990'
-      @drb_example_file_counter = 0
       DRb::start_service("druby://127.0.0.1:#{@drb_port}", SimpleDRbSpecServer)
     end
 
     after(:all) do
       DRb::stop_service
+    end
+
+    it "falls back to `druby://:0` when `druby://localhost:0` fails" do
+      # see https://bugs.ruby-lang.org/issues/496 for background
+      expect(::DRb).to receive(:start_service).with("druby://localhost:0").and_raise(SocketError)
+      expect(::DRb).to receive(:start_service).with("druby://:0").and_call_original
+
+      result = runner("--drb-port", @drb_port, passing_spec_filename).run(err, out)
+      expect(result).to be(0)
     end
 
     it "returns 0 if spec passes" do
@@ -93,10 +100,9 @@ RSpec.describe RSpec::Core::DRbRunner, :isolated_directory => true, :isolated_ho
       expect(result).to be(1)
     end
 
-    it "outputs colorized text when running with --color option" do
+    it "outputs colorized text when running with --force-color option" do
       failure_symbol = "\e[#{RSpec::Core::Formatters::ConsoleCodes.console_code_for(:red)}mF"
-      allow(out).to receive_messages(:tty? => true)
-      runner(failing_spec_filename, "--color", "--drb-port", @drb_port).run(err, out)
+      runner(failing_spec_filename, "--force-color", "--drb-port", @drb_port).run(err, out)
       expect(out.string).to include(failure_symbol)
     end
   end
@@ -119,10 +125,10 @@ RSpec.describe RSpec::Core::DRbOptions, :isolated_directory => true, :isolated_h
 
     it "preserves extra arguments" do
       allow(File).to receive(:exist?) { false }
-      expect(drb_argv_for(%w[ a --drb b --color c ])).to match_array %w[ --color a b c ]
+      expect(drb_argv_for(%w[ a --drb b --no-color c ])).to match_array %w[ --no-color a b c ]
     end
 
-    %w(--color --fail-fast --profile --backtrace --tty).each do |option|
+    %w(--force-color --no-color --fail-fast --profile --backtrace).each do |option|
       it "includes #{option}" do
         expect(drb_argv_for([option])).to include(option)
       end
@@ -237,41 +243,41 @@ RSpec.describe RSpec::Core::DRbOptions, :isolated_directory => true, :isolated_h
 
     context "--drb specified in ARGV" do
       it "renders all the original arguments except --drb" do
-        argv = drb_argv_for(%w[ --drb --color --format s --example pattern
+        argv = drb_argv_for(%w[ --drb --no-color --format s --example pattern
                                 --profile --backtrace -I
                                 path/a -I path/b --require path/c --require
                                 path/d])
-        expect(argv).to eq(%w[ --color --profile --backtrace --example pattern --format s -I path/a -I path/b --require path/c --require path/d])
+        expect(argv).to eq(%w[ --no-color --profile --backtrace --example pattern --format s -I path/a -I path/b --require path/c --require path/d])
       end
     end
 
     context "--drb specified in the options file" do
       it "renders all the original arguments except --drb" do
-        File.open("./.rspec", "w") {|f| f << "--drb --color"}
-        drb_argv = drb_argv_for(%w[ --tty --format s --example pattern --profile --backtrace ])
-        expect(drb_argv).to eq(%w[ --color --profile --backtrace --tty --example pattern --format s])
+        File.open("./.rspec", "w") {|f| f << "--drb --no-color"}
+        drb_argv = drb_argv_for(%w[ --format s --example pattern --profile --backtrace ])
+        expect(drb_argv).to eq(%w[ --no-color --profile --backtrace --example pattern --format s])
       end
     end
 
     context "--drb specified in ARGV and the options file" do
       it "renders all the original arguments except --drb" do
-        File.open("./.rspec", "w") {|f| f << "--drb --color"}
+        File.open("./.rspec", "w") {|f| f << "--drb --no-color"}
         argv = drb_argv_for(%w[ --drb --format s --example pattern --profile --backtrace])
-        expect(argv).to eq(%w[ --color --profile --backtrace --example pattern --format s])
+        expect(argv).to eq(%w[ --no-color --profile --backtrace --example pattern --format s])
       end
     end
 
     context "--drb specified in ARGV and in as ARGV-specified --options file" do
       it "renders all the original arguments except --drb and --options" do
-        File.open("./.rspec", "w") {|f| f << "--drb --color"}
+        File.open("./.rspec", "w") {|f| f << "--drb --no-color"}
         argv = drb_argv_for(%w[ --drb --format s --example pattern --profile --backtrace])
-        expect(argv).to eq(%w[ --color --profile --backtrace --example pattern --format s ])
+        expect(argv).to eq(%w[ --no-color --profile --backtrace --example pattern --format s ])
       end
     end
 
     describe "--drb, -X" do
       it "does not send --drb back to the parser after parsing options" do
-        expect(drb_argv_for(%w[--drb --color])).not_to include("--drb")
+        expect(drb_argv_for(%w[--drb --no-color])).not_to include("--drb")
       end
     end
   end

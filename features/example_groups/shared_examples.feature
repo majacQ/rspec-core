@@ -1,6 +1,6 @@
 Feature: shared examples
 
-  Shared examples let you describe behaviour of types or modules. When declared,
+  Shared examples let you describe behaviour of classes or modules. When declared,
   a shared group's content is stored. It is only realized in the context of
   another example group, which provides any context the shared group needs to
   run.
@@ -10,14 +10,56 @@ Feature: shared examples
   ```ruby
   include_examples "name"      # include the examples in the current context
   it_behaves_like "name"       # include the examples in a nested context
-  it_should_behave_like "name" # include the examples in a nested context
-  matching metadata            # include the examples in the current context
   ```
 
   **WARNING:** Files containing shared groups must be loaded before the files that
   use them.  While there are conventions to handle this, RSpec does _not_ do
   anything special (like autoload). Doing so would require a strict naming
   convention for files that would break existing suites.
+
+  **WARNING:** When you include parameterized examples in the current context multiple
+  times, you may override previous method definitions and last declaration wins.
+  So if you have this kind of shared example (or shared context)
+
+  ```ruby
+  RSpec.shared_examples "some example" do |parameter|
+    \# Same behavior is triggered also with either `def something; 'some value'; end`
+    \# or `define_method(:something) { 'some value' }`
+    let(:something) { parameter }
+    it "uses the given parameter" do
+      expect(something).to eq(parameter)
+    end
+  end
+
+  RSpec.describe SomeClass do
+    include_examples "some example", "parameter1"
+    include_examples "some example", "parameter2"
+  end
+  ```
+
+  You're actually doing this (notice that first example will fail):
+
+  ```ruby
+  RSpec.describe SomeClass do
+    \# Reordered code for better understanding of what is happening
+    let(:something) { "parameter1" }
+    let(:something) { "parameter2" }
+
+    it "uses the given parameter" do
+      \# This example will fail because last let "wins"
+      expect(something).to eq("parameter1")
+    end
+
+    it "uses the given parameter" do
+      expect(something).to eq("parameter2")
+    end
+  end
+  ```
+
+  To prevent this kind of subtle error a warning is emitted if you declare multiple
+  methods with the same name in the same context. Should you get this warning
+  the simplest solution is to replace `include_examples` with `it_behaves_like`, in this
+  way method overriding is avoided because of the nested context created by `it_behaves_like`
 
   Conventions:
   ------------
@@ -32,7 +74,7 @@ Feature: shared examples
       and require files in that directory from `spec/spec_helper.rb`:
 
       ```ruby
-      Dir["./spec/support/**/*.rb"].sort.each { |f| require f}
+      Dir["./spec/support/**/*.rb"].sort.each { |f| require f }
       ```
 
       Historically, this was included in the generated `spec/spec_helper.rb` file in
@@ -60,15 +102,15 @@ Feature: shared examples
         end
 
         describe "#include?" do
-          context "with an an item that is in the collection" do
+          context "with an item that is in the collection" do
             it "returns true" do
-              expect(collection.include?(7)).to be_truthy
+              expect(collection.include?(7)).to be(true)
             end
           end
 
-          context "with an an item that is not in the collection" do
+          context "with an item that is not in the collection" do
             it "returns false" do
-              expect(collection.include?(9)).to be_falsey
+              expect(collection.include?(9)).to be(false)
             end
           end
         end
@@ -91,9 +133,9 @@ Feature: shared examples
           initialized with 3 items
             says it has three items
           #include?
-            with an an item that is in the collection
+            with an item that is in the collection
               returns true
-            with an an item that is not in the collection
+            with an item that is not in the collection
               returns false
 
       Set
@@ -101,9 +143,9 @@ Feature: shared examples
           initialized with 3 items
             says it has three items
           #include?
-            with an an item that is in the collection
+            with an item that is in the collection
               returns true
-            with an an item that is not in the collection
+            with an item that is not in the collection
               returns false
       """
 
@@ -162,12 +204,12 @@ Feature: shared examples
 
     RSpec.describe Array, "with 3 items" do
       subject { [1, 2, 3] }
-      it_should_behave_like "a measurable object", 3, [:size, :length]
+      it_behaves_like "a measurable object", 3, [:size, :length]
     end
 
     RSpec.describe String, "of 6 characters" do
       subject { "FooBar" }
-      it_should_behave_like "a measurable object", 6, [:size, :length]
+      it_behaves_like "a measurable object", 6, [:size, :length]
     end
     """
     When I run `rspec shared_example_group_params_spec.rb --format documentation`
@@ -175,21 +217,21 @@ Feature: shared examples
     And the output should contain:
       """
       Array with 3 items
-        it should behave like a measurable object
+        behaves like a measurable object
           should return 3 from #size
           should return 3 from #length
 
       String of 6 characters
-        it should behave like a measurable object
+        behaves like a measurable object
           should return 6 from #size
           should return 6 from #length
       """
 
-  Scenario: Aliasing `it_should_behave_like` to `it_has_behavior`
+  Scenario: Aliasing `it_behaves_like` to `it_has_behavior`
     Given a file named "shared_example_group_spec.rb" with:
       """ruby
       RSpec.configure do |c|
-        c.alias_it_should_behave_like_to :it_has_behavior, 'has behavior:'
+        c.alias_it_behaves_like_to :it_has_behavior, 'has behavior:'
       end
 
       RSpec.shared_examples 'sortability' do
@@ -212,23 +254,6 @@ Feature: shared examples
         has behavior: sortability
           responds to <=>
       """
-
-  Scenario: Sharing metadata automatically includes shared example groups
-    Given a file named "shared_example_metadata_spec.rb" with:
-      """ruby
-      RSpec.shared_examples "shared stuff", :a => :b do
-        it 'runs wherever the metadata is shared' do
-        end
-      end
-
-      RSpec.describe String, :a => :b do
-      end
-      """
-      When I run `rspec shared_example_metadata_spec.rb`
-      Then the output should contain:
-        """
-        1 example, 0 failures
-        """
 
   Scenario: Shared examples are nestable by context
     Given a file named "context_specific_examples_spec.rb" with:

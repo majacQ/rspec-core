@@ -69,13 +69,13 @@ module RSpec
           example = failure.example
 
           exception = failure.exception
+          message_lines = failure.fully_formatted_lines(nil, RSpec::Core::Notifications::NullColorizer)
           exception_details = if exception
                                 {
-                                  :message => exception.message,
-                                  :backtrace => failure.formatted_backtrace.join("\n")
+                                  # drop 2 removes the description (regardless of newlines) and leading blank line
+                                  :message => message_lines.drop(2).join("\n"),
+                                  :backtrace => failure.formatted_backtrace.join("\n"),
                                 }
-                              else
-                                false
                               end
           extra = extra_failure_content(failure)
 
@@ -85,8 +85,7 @@ module RSpec
             example.execution_result.run_time,
             @failed_examples.size,
             exception_details,
-            (extra == "") ? false : extra,
-            true
+            (extra == "") ? false : extra
           )
           @printer.flush
         end
@@ -140,12 +139,12 @@ module RSpec
         # spec. For example, you could output links to images or other files
         # produced during the specs.
         def extra_failure_content(failure)
-          RSpec::Support.require_rspec_core "formatters/snippet_extractor"
-          backtrace = failure.exception.backtrace.map do |line|
+          RSpec::Support.require_rspec_core "formatters/html_snippet_extractor"
+          backtrace = (failure.exception.backtrace || []).map do |line|
             RSpec.configuration.backtrace_formatter.backtrace_line(line)
           end
           backtrace.compact!
-          @snippet_extractor ||= SnippetExtractor.new
+          @snippet_extractor ||= HtmlSnippetExtractor.new
           "    <pre class=\"ruby\"><code>#{@snippet_extractor.snippet(backtrace)}</code></pre>"
         end
       end

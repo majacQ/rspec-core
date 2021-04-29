@@ -29,10 +29,11 @@ Feature: `skip` examples
     And the output should contain "1 example, 0 failures, 1 pending"
     And the output should contain:
       """
-      Pending:
-        an example is skipped
-          # No reason given
-          # ./skipped_spec.rb:2
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) an example is skipped
+           # No reason given
+           # ./skipped_spec.rb:2
       """
 
   Scenario: Skipping using `skip` inside an example
@@ -49,10 +50,11 @@ Feature: `skip` examples
     And the output should contain "1 example, 0 failures, 1 pending"
     And the output should contain:
       """
-      Pending:
-        an example is skipped
-          # No reason given
-          # ./skipped_spec.rb:2
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) an example is skipped
+           # No reason given
+           # ./skipped_spec.rb:2
       """
 
   Scenario: Temporarily skipping by prefixing `it`, `specify`, or `example` with an x
@@ -74,16 +76,19 @@ Feature: `skip` examples
     And the output should contain "3 examples, 0 failures, 3 pending"
     And the output should contain:
       """
-      Pending:
-        an example is skipped using xit
-          # Temporarily skipped with xit
-          # ./temporarily_skipped_spec.rb:2
-        an example is skipped using xspecify
-          # Temporarily skipped with xspecify
-          # ./temporarily_skipped_spec.rb:5
-        an example is skipped using xexample
-          # Temporarily skipped with xexample
-          # ./temporarily_skipped_spec.rb:8
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) an example is skipped using xit
+           # Temporarily skipped with xit
+           # ./temporarily_skipped_spec.rb:2
+
+        2) an example is skipped using xspecify
+           # Temporarily skipped with xspecify
+           # ./temporarily_skipped_spec.rb:5
+
+        3) an example is skipped using xexample
+           # Temporarily skipped with xexample
+           # ./temporarily_skipped_spec.rb:8
       """
 
   Scenario: Skipping using metadata
@@ -99,8 +104,30 @@ Feature: `skip` examples
     And the output should contain "1 example, 0 failures, 1 pending"
     And the output should contain:
       """
-      Pending:
-        an example is skipped
-          # No reason given
-          # ./skipped_spec.rb:2
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) an example is skipped
+           # No reason given
+           # ./skipped_spec.rb:2
+      """
+
+  Scenario: Skipping using metadata with a reason
+    Given a file named "skipped_with_reason_spec.rb" with:
+      """ruby
+      RSpec.describe "an example" do
+        example "is skipped", :skip => "waiting for planets to align" do
+          raise "this line is never executed"
+        end
+      end
+      """
+    When I run `rspec skipped_with_reason_spec.rb`
+    Then the exit status should be 0
+    And the output should contain "1 example, 0 failures, 1 pending"
+    And the output should contain:
+      """
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) an example is skipped
+           # waiting for planets to align
+           # ./skipped_with_reason_spec.rb:2
       """

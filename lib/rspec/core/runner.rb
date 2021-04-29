@@ -2,6 +2,10 @@ module RSpec
   module Core
     # Provides the main entry point to run a suite of RSpec examples.
     class Runner
+      # @attr_reader
+      # @private
+      attr_reader :options, :configuration, :world
+
       # Register an `at_exit` hook that runs the suite when the process exits.
       #
       # @note This is not generally needed. The `rspec` command takes care
@@ -17,18 +21,21 @@ module RSpec
           return
         end
 
-        at_exit do
-          # Don't bother running any specs and just let the program terminate
-          # if we got here due to an unrescued exception (anything other than
-          # SystemExit, which is raised when somebody calls Kernel#exit).
-          next unless $!.nil? || $!.is_a?(SystemExit)
-
-          # We got here because either the end of the program was reached or
-          # somebody called Kernel#exit. Run the specs and then override any
-          # existing exit status with RSpec's exit status if any specs failed.
-          invoke
-        end
+        at_exit { perform_at_exit }
         @installed_at_exit = true
+      end
+
+      # @private
+      def self.perform_at_exit
+        # Don't bother running any specs and just let the program terminate
+        # if we got here due to an unrescued exception (anything other than
+        # SystemExit, which is raised when somebody calls Kernel#exit).
+        return unless $!.nil? || $!.is_a?(SystemExit)
+
+        # We got here because either the end of the program was reached or
+        # somebody called Kernel#exit. Run the specs and then override any
+        # existing exit status with RSpec's exit status if any specs failed.
+        invoke
       end
 
       # Runs the suite of specs and exits the process with an appropriate exit
@@ -58,14 +65,8 @@ module RSpec
         trap_interrupt
         options = ConfigurationOptions.new(args)
 
-        if options.options[:drb]
-          require 'rspec/core/drb'
-          begin
-            DRbRunner.new(options).run(err, out)
-          rescue DRb::DRbConnError
-            err.puts "No DRb server is running. Running in local process instead ..."
-            new(options).run(err, out)
-          end
+        if options.options[:runner]
+          options.options[:runner].call(options, err, out)
         else
           new(options).run(err, out)
         end
@@ -83,7 +84,11 @@ module RSpec
       # @param out [IO] output stream
       def run(err, out)
         setup(err, out)
-        run_specs(@world.ordered_example_groups)
+        return @configuration.reporter.exit_early(exit_code) if RSpec.world.wants_to_quit
+
+        run_specs(@world.ordered_example_groups).tap do
+          persist_example_statuses
+        end
       end
 
       # Wires together the various configuration objects and state holders.
@@ -91,10 +96,11 @@ module RSpec
       # @param err [IO] error stream
       # @param out [IO] output stream
       def setup(err, out)
-        @configuration.error_stream = err
-        @configuration.output_stream = out if @configuration.output_stream == $stdout
-        @options.configure(@configuration)
+        configure(err, out)
+        return if RSpec.world.wants_to_quit
+
         @configuration.load_spec_files
+      ensure
         @world.announce_filters
       end
 
@@ -105,15 +111,25 @@ module RSpec
       #   or the configured failure exit code (1 by default) if specs
       #   failed.
       def run_specs(example_groups)
-        @configuration.reporter.report(@world.example_count(example_groups)) do |reporter|
-          begin
-            hook_context = SuiteHookContext.new
-            @configuration.hooks.run(:before, :suite, hook_context)
-            example_groups.map { |g| g.run(reporter) }.all? ? 0 : @configuration.failure_exit_code
-          ensure
-            @configuration.hooks.run(:after, :suite, hook_context)
+        examples_count = @world.example_count(example_groups)
+        examples_passed = @configuration.reporter.report(examples_count) do |reporter|
+          @configuration.with_suite_hooks do
+            if examples_count == 0 && @configuration.fail_if_no_examples
+              return @configuration.failure_exit_code
+            end
+
+            example_groups.map { |g| g.run(reporter) }.all?
           end
         end
+
+        exit_code(examples_passed)
+      end
+
+      # @private
+      def configure(err, out)
+        @configuration.error_stream = err
+        @configuration.output_stream = out if @configuration.output_stream == $stdout
+        @options.configure(@configuration)
       end
 
       # @private
@@ -132,27 +148,64 @@ module RSpec
       end
 
       # @private
-      # rubocop:disable Lint/EnsureReturn
       def self.running_in_drb?
-        if defined?(DRb) && DRb.current_server
-          require 'socket'
-          require 'uri'
-          local_ipv4 = IPSocket.getaddress(Socket.gethostname)
-          local_drb = ["127.0.0.1", "localhost", local_ipv4].any? { |addr| addr == URI(DRb.current_server.uri).host }
-        end
-      rescue DRb::DRbServerNotFound
-      ensure
-        return local_drb || false
+        return false unless defined?(DRb)
+
+        server = begin
+                   DRb.current_server
+                 rescue DRb::DRbServerNotFound
+                   return false
+                 end
+
+        return false unless server && server.alive?
+
+        require 'socket'
+        require 'uri'
+
+        local_ipv4 = begin
+                       IPSocket.getaddress(Socket.gethostname)
+                     rescue SocketError
+                       return false
+                     end
+
+        ["127.0.0.1", "localhost", local_ipv4].any? { |addr| addr == URI(DRb.current_server.uri).host }
       end
-      # rubocop:enable Lint/EnsureReturn
 
       # @private
       def self.trap_interrupt
-        trap('INT') do
-          exit!(1) if RSpec.world.wants_to_quit
+        trap('INT') { handle_interrupt }
+      end
+
+      # @private
+      def self.handle_interrupt
+        if RSpec.world.wants_to_quit
+          exit!(1)
+        else
           RSpec.world.wants_to_quit = true
-          STDERR.puts "\nRSpec is shutting down and will print the summary report... Interrupt again to force quit."
+          $stderr.puts "\nRSpec is shutting down and will print the summary report... Interrupt again to force quit."
         end
+      end
+
+      # @private
+      def exit_code(examples_passed=false)
+        return @configuration.error_exit_code || @configuration.failure_exit_code if @world.non_example_failure
+        return @configuration.failure_exit_code unless examples_passed
+
+        0
+      end
+
+    private
+
+      def persist_example_statuses
+        return if @configuration.dry_run
+        return unless (path = @configuration.example_status_persistence_file_path)
+
+        ExampleStatusPersister.persist(@world.all_examples, path)
+      rescue SystemCallError => e
+        RSpec.warning "Could not write example statuses to #{path} (configured as " \
+                      "`config.example_status_persistence_file_path`) due to a " \
+                      "system error: #{e.inspect}. Please check that the config " \
+                      "option is set to an accessible, valid file path", :call_site => nil
       end
     end
   end

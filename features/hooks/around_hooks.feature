@@ -17,6 +17,9 @@ Feature: `around` hooks
   **WARNING:** Mock frameworks are set up and torn down within the context of
   running the example. You cannot interact with them directly in `around` hooks.
 
+  **WARNING:** `around` hooks will execute *before* any `before` hooks, and *after*
+  any `after` hooks regardless of the context they were defined in.
+
   Scenario: Use the example as a proc within the block passed to `around()`
     Given a file named "example_spec.rb" with:
       """ruby
@@ -216,7 +219,7 @@ Feature: `around` hooks
         end
 
         it "runs the example in the correct context" do
-          expect(included_in_configure_block).to be_truthy
+          expect(included_in_configure_block).to be(true)
         end
       end
       """
@@ -238,9 +241,11 @@ Feature: `around` hooks
     Then the output should contain "1 example, 0 failures, 1 pending"
     And the output should contain:
       """
-      Pending:
-        implicit pending example should be detected as Not yet implemented
-          # Not yet implemented
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) implicit pending example should be detected as Not yet implemented
+           # Not yet implemented
+           # ./example_spec.rb:6
       """
 
 
@@ -262,8 +267,10 @@ Feature: `around` hooks
     Then the output should contain "1 example, 0 failures, 1 pending"
     And the output should contain:
       """
-        explicit pending example should be detected as pending
-          # No reason given
+      Pending: (Failures listed here are expected and do not affect your suite's status)
+
+        1) explicit pending example should be detected as pending
+           # No reason given
       """
 
   Scenario: Multiple `around` hooks in the same scope

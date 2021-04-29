@@ -1,5 +1,3 @@
-require "spec_helper"
-
 module RSpec::Core
   RSpec.describe Hooks do
     class HooksHost
@@ -7,6 +5,74 @@ module RSpec::Core
 
       def parent_groups
         []
+      end
+
+      def register_hook(position, scope, *args, &block)
+        block ||= Proc.new { }
+        __send__(position, scope, *args, &block)
+        hook_collection_for(position, scope).first
+      end
+
+      def hook_collection_for(position, scope)
+        hooks.send(:all_hooks_for, position, scope)
+      end
+    end
+
+    [:example, :context, :suite].each do |scope|
+      describe "#before(#{scope})" do
+        it "stops running subsequent hooks of the same type when an error is encountered" do
+          sequence = []
+
+          RSpec.configure do |c|
+            c.output_stream = StringIO.new
+
+            c.before(scope) do
+              sequence << :hook_1
+              raise "boom"
+            end
+
+            c.before(scope) do
+              sequence << :hook_2
+              raise "boom"
+            end
+          end
+
+          RSpec.configuration.with_suite_hooks do
+            RSpec.describe do
+              example { sequence << :example }
+            end.run
+          end
+
+          expect(sequence).to eq [:hook_1]
+        end
+      end
+
+      describe "#after(#{scope})" do
+        it "runs subsequent hooks of the same type when an error is encountered so all cleanup can complete" do
+          sequence = []
+
+          RSpec.configure do |c|
+            c.output_stream = StringIO.new
+
+            c.after(scope) do
+              sequence << :hook_2
+              raise "boom"
+            end
+
+            c.after(scope) do
+              sequence << :hook_1
+              raise "boom"
+            end
+          end
+
+          RSpec.configuration.with_suite_hooks do
+            RSpec.describe do
+              example { sequence << :example }
+            end.run
+          end
+
+          expect(sequence).to eq [:example, :hook_1, :hook_2]
+        end
       end
     end
 
@@ -17,10 +83,7 @@ module RSpec::Core
         describe "##{type}(#{scope})" do
           it_behaves_like "metadata hash builder" do
             define_method :metadata_hash do |*args|
-              instance = HooksHost.new
-              args.unshift scope if scope
-              hooks = instance.send(type, *args) {}
-              hooks.first.options
+              HooksHost.new.register_hook(type, scope, *args).options
             end
           end
         end
@@ -30,38 +93,35 @@ module RSpec::Core
         let(:instance) { HooksHost.new }
 
         it "defaults to :example scope if no arguments are given" do
-          hooks = instance.send(type) {}
-          hook = hooks.first
-          expect(instance.hooks[type][:example]).to include(hook)
+          expect {
+            instance.__send__(type) {}
+          }.to change { instance.hook_collection_for(type, :example).count }.by(1)
         end
 
         it "defaults to :example scope if the only argument is a metadata hash" do
-          hooks = instance.send(type, :foo => :bar) {}
-          hook = hooks.first
-          expect(instance.hooks[type][:example]).to include(hook)
+          expect {
+            instance.__send__(type, :foo => :bar) {}
+          }.to change { instance.hook_collection_for(type, :example).count }.by(1)
         end
 
         it "raises an error if only metadata symbols are given as arguments" do
-          expect { instance.send(type, :foo, :bar) {} }.to raise_error(ArgumentError)
+          expect { instance.__send__(type, :foo, :bar) {} }.to raise_error(ArgumentError)
         end
       end
     end
 
     [:before, :after].each do |type|
-      [:example, :context, :suite].each do |scope|
+      [:example, :context].each do |scope|
         describe "##{type}(#{scope.inspect})" do
           let(:instance) { HooksHost.new }
-          let!(:hook) do
-            hooks = instance.send(type, scope) {}
-            hooks.first
-          end
+          let!(:hook)    { instance.register_hook(type, scope) }
 
           it "does not make #{scope.inspect} a metadata key" do
             expect(hook.options).to be_empty
           end
 
           it "is scoped to #{scope.inspect}" do
-            expect(instance.hooks[type][scope]).to include(hook)
+            expect(instance.hook_collection_for(type, scope)).to include(hook)
           end
 
           it 'does not run when in dry run mode' do
@@ -72,27 +132,16 @@ module RSpec::Core
               instance.hooks.run(type, scope, double("Example").as_null_object)
             }.not_to yield_control
           end
+
+          if scope == :example
+            it "yields the example as an argument to the hook" do
+              group = RSpec.describe
+              ex = group.example { }
+
+              expect { |p| group.send(type, scope, &p); group.run }.to yield_with_args(ex)
+            end
+          end
         end
-      end
-    end
-
-    context "when an error happens in `after(:suite)`" do
-      it 'allows the error to propagate to the user' do
-        RSpec.configuration.after(:suite) { 1 / 0 }
-
-        expect {
-          RSpec.configuration.hooks.run(:after, :suite, SuiteHookContext.new)
-        }.to raise_error(ZeroDivisionError)
-      end
-    end
-
-    context "when an error happens in `before(:suite)`" do
-      it 'allows the error to propagate to the user' do
-        RSpec.configuration.before(:suite) { 1 / 0 }
-
-        expect {
-          RSpec.configuration.hooks.run(:before, :suite, SuiteHookContext.new)
-        }.to raise_error(ZeroDivisionError)
       end
     end
 
@@ -125,16 +174,6 @@ module RSpec::Core
           end
         end
 
-        if RUBY_VERSION.to_f < 1.9
-          def hook_desc(_)
-            "around hook"
-          end
-        else
-          def hook_desc(line)
-            "around hook at #{Metadata.relative_path(__FILE__)}:#{line}"
-          end
-        end
-
         it 'indicates which around hook did not run the example in the pending message' do
           ex = nil
           line = __LINE__ + 3
@@ -147,7 +186,8 @@ module RSpec::Core
           end
 
           group.run
-          expect(ex.execution_result.pending_message).to eq("#{hook_desc(line)} did not execute the example")
+          expect(ex.execution_result.pending_message)
+            .to eq("around hook at #{Metadata.relative_path(__FILE__)}:#{line} did not execute the example")
         end
       end
 
@@ -182,7 +222,7 @@ module RSpec::Core
       context "when not running the example within the around block" do
         it "does not run the example" do
           examples = []
-          group = ExampleGroup.describe do
+          group = RSpec.describe do
             around do
             end
             it "foo" do
@@ -197,7 +237,7 @@ module RSpec::Core
       context "when running the example within the around block" do
         it "runs the example" do
           examples = []
-          group = ExampleGroup.describe do
+          group = RSpec.describe do
             around do |example|
               example.run
             end
@@ -211,7 +251,7 @@ module RSpec::Core
 
         it "exposes example metadata to each around hook" do
           foos = {}
-          group = ExampleGroup.describe do
+          group = RSpec.describe do
             around do |ex|
               foos[:first] = ex.metadata[:foo]
               ex.run
@@ -233,7 +273,7 @@ module RSpec::Core
           data_2 = {}
           ex     = nil
 
-          group = ExampleGroup.describe do
+          group = RSpec.describe do
             def self.data_from(ex)
               {
                 :description => ex.description,
@@ -266,7 +306,7 @@ module RSpec::Core
 
         it "exposes a sensible inspect value" do
           inspect_value = nil
-          group = ExampleGroup.describe do
+          group = RSpec.describe do
             around do |ex|
               inspect_value = ex.inspect
             end
@@ -283,7 +323,7 @@ module RSpec::Core
       context "when running the example within a block passed to a method" do
         it "runs the example" do
           examples = []
-          group = ExampleGroup.describe do
+          group = RSpec.describe do
             def yielder
               yield
             end
@@ -312,7 +352,7 @@ module RSpec::Core
           RSpec.configure { |config| config.before(scope)         { messages << "config 4" } }
           RSpec.configure { |config| config.prepend_before(scope) { messages << "config 1" } }
 
-          group = ExampleGroup.describe { example {} }
+          group = RSpec.describe { example {} }
           group.before(scope)         { messages << "group 3" }
           group.prepend_before(scope) { messages << "group 2" }
           group.before(scope)         { messages << "group 4" }
@@ -341,7 +381,7 @@ module RSpec::Core
           RSpec.configure { |config| config.append_before(scope) { messages << "config 2" } }
           RSpec.configure { |config| config.before(scope)        { messages << "config 3" } }
 
-          group = ExampleGroup.describe { example {} }
+          group = RSpec.describe { example {} }
           group.before(scope)        { messages << "group 1" }
           group.append_before(scope) { messages << "group 2" }
           group.before(scope)        { messages << "group 3" }
@@ -367,7 +407,7 @@ module RSpec::Core
           RSpec.configure { |config| config.prepend_after(scope) { messages << "config 2" } }
           RSpec.configure { |config| config.after(scope)         { messages << "config 1" } }
 
-          group = ExampleGroup.describe { example {} }
+          group = RSpec.describe { example {} }
           group.after(scope)         { messages << "group 3" }
           group.prepend_after(scope) { messages << "group 2" }
           group.after(scope)         { messages << "group 1" }
@@ -394,7 +434,7 @@ module RSpec::Core
           RSpec.configure { |config| config.after(scope)        { messages << "config 1" } }
           RSpec.configure { |config| config.append_after(scope) { messages << "config 4" } }
 
-          group = ExampleGroup.describe { example {} }
+          group = RSpec.describe { example {} }
           group.after(scope)        { messages << "group 2" }
           group.append_after(scope) { messages << "group 3" }
           group.after(scope)        { messages << "group 1" }
@@ -427,7 +467,7 @@ module RSpec::Core
           c.around(:each, &hook)
         end
 
-        group = ExampleGroup.describe { example { messages << "example" } }
+        group = RSpec.describe { example { messages << "example" } }
         group.run
         expect(messages).to eq ["hook 1", "hook 2", "example"]
       end
@@ -442,6 +482,33 @@ module RSpec::Core
         :prepend_before, :prepend_after,
         :hooks
       ])
+    end
+
+    it 'raises an error for `around(:context)`' do
+      expect {
+        RSpec.describe do
+          around(:context) { }
+        end
+      }.to raise_error(ArgumentError, a_string_including("`around(:context)` hooks are not supported"))
+    end
+
+    it 'raises an error for `around(:context)` defined in `configure`' do
+      expect {
+        RSpec.configure do |c|
+          c.around(:context) { }
+        end
+      }.to raise_error(ArgumentError, a_string_including("`around(:context)` hooks are not supported"))
+    end
+
+    [:before, :around, :after].each do |type|
+      it "emits a warning for `#{type}(:suite)` hooks" do
+        expect {
+          RSpec.describe do
+            send(type, :suite) { }
+          end
+        }.to raise_error(ArgumentError, a_string_including(
+          "`#{type}(:suite)` hooks are only supported on the RSpec configuration object"))
+      end
     end
   end
 end

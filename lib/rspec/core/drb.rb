@@ -40,15 +40,16 @@ module RSpec
 
       def options
         argv = []
-        argv << "--color"        if @submitted_options[:color]
+        argv << "--force-color"  if @submitted_options[:color_mode] == :on
+        argv << "--no-color"     if @submitted_options[:color_mode] == :off
         argv << "--profile"      if @submitted_options[:profile_examples]
         argv << "--backtrace"    if @submitted_options[:full_backtrace]
-        argv << "--tty"          if @submitted_options[:tty]
         argv << "--fail-fast"    if @submitted_options[:fail_fast]
         argv << "--options"      << @submitted_options[:custom_options_file] if @submitted_options[:custom_options_file]
         argv << "--order"        << @submitted_options[:order]               if @submitted_options[:order]
 
         add_failure_exit_code(argv)
+        add_error_exit_code(argv)
         add_full_description(argv)
         add_filter(argv, :inclusion, @filter_manager.inclusions)
         add_filter(argv, :exclusion, @filter_manager.exclusions)
@@ -65,6 +66,12 @@ module RSpec
         argv << "--failure-exit-code" << @submitted_options[:failure_exit_code].to_s
       end
 
+      def add_error_exit_code(argv)
+        return unless @submitted_options[:error_exit_code]
+
+        argv << "--error-exit-code" << @submitted_options[:error_exit_code].to_s
+      end
+
       def add_full_description(argv)
         return unless @submitted_options[:full_description]
 
@@ -77,12 +84,9 @@ module RSpec
         end
       end
 
-      CONDITIONAL_FILTERS = [:if, :unless]
-
       def add_filter(argv, name, hash)
         hash.each_pair do |k, v|
-          next if CONDITIONAL_FILTERS.include?(k)
-          tag = name == :inclusion ? k.to_s : "~#{k}"
+          tag = name == :inclusion ? k.to_s : "~#{k}".dup
           tag << ":#{v}" if v.is_a?(String)
           argv << "--tag" << tag
         end unless hash.empty?

@@ -1,5 +1,4 @@
 RSpec::Support.require_rspec_core "formatters/base_formatter"
-RSpec::Support.require_rspec_core "formatters/console_codes"
 
 module RSpec
   module Core
@@ -58,17 +57,17 @@ module RSpec
 
         # @api public
         #
-        # Invoked at the very end, `close` allows the formatter to clean
-        # up resources, e.g. open streams, etc.
+        # Invoked at the end of a suite run. Allows the formatter to do any
+        # tidying up, but be aware that formatter output streams may be used
+        # elsewhere so don't actually close them.
         #
         # @param _notification [NullNotification] (Ignored)
         def close(_notification)
-          return unless IO === output
           return if output.closed?
 
           output.puts
 
-          output.close unless output == $stdout
+          output.flush
         end
       end
     end

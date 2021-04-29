@@ -1,4 +1,3 @@
-require 'spec_helper'
 require 'rspec/core/formatters/helpers'
 
 RSpec.describe RSpec::Core::Formatters::Helpers do
@@ -31,7 +30,13 @@ RSpec.describe RSpec::Core::Formatters::Helpers do
 
     context '> 300' do
       it "returns 'x minutes xx seconds' formatted string" do
+        expect(helper.format_duration(315.14)).to eq("5 minutes 15 seconds")
         expect(helper.format_duration(335.14)).to eq("5 minutes 35 seconds")
+      end
+
+      it "returns 'x minutes xx seconds' correctly on edgecase roundings" do
+        expect(helper.format_duration(359.111111111111)).to eq("5 minutes 59 seconds")
+        expect(helper.format_duration(359.999999999999)).to eq("6 minutes 0 seconds")
       end
     end
 
@@ -47,13 +52,9 @@ RSpec.describe RSpec::Core::Formatters::Helpers do
       end
     end
 
-    context 'with mathn loaded' do
-      include MathnIntegrationSupport
-
-      it "returns 'x minutes xx.x seconds' formatted string", :slow do
-        with_mathn_loaded do
-          expect(helper.format_duration(133.7)).to eq("2 minutes 13.7 seconds")
-        end
+    context '= 70' do
+      it "returns 'x minute, x0 seconds' formatted string" do
+        expect(helper.format_duration(70)).to eq("1 minute 10 seconds")
       end
     end
   end
@@ -83,6 +84,12 @@ RSpec.describe RSpec::Core::Formatters::Helpers do
           expect(helper.format_seconds(1.00000000001)).to eq("1")
         end
       end
+
+      context "70" do
+        it "doesn't strip of meaningful trailing zeros" do
+          expect(helper.format_seconds(70)).to eq("70")
+        end
+      end
     end
 
     context "second and greater times" do
@@ -100,5 +107,38 @@ RSpec.describe RSpec::Core::Formatters::Helpers do
     end
   end
 
+  describe "pluralize" do
+    context "when word does not end in s" do
+      let(:word){ "second" }
+
+      it "pluralizes with 0" do
+        expect(helper.pluralize(0, "second")).to eq("0 seconds")
+      end
+
+      it "does not pluralizes with 1" do
+        expect(helper.pluralize(1, "second")).to eq("1 second")
+      end
+
+      it "pluralizes with 2" do
+        expect(helper.pluralize(2, "second")).to eq("2 seconds")
+      end
+    end
+
+    context "when word ends in s" do
+      let(:word){ "process" }
+
+      it "pluralizes with 0" do
+        expect(helper.pluralize(0, "process")).to eq("0 processes")
+      end
+
+      it "does not pluralizes with 1" do
+        expect(helper.pluralize(1, "process")).to eq("1 process")
+      end
+
+      it "pluralizes with 2" do
+        expect(helper.pluralize(2, "process")).to eq("2 processes")
+      end
+    end
+  end
 
 end

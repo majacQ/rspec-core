@@ -17,12 +17,12 @@ module RSpec
       # @see RSpec::Core::Formatters::BaseTextFormatter
       # @see RSpec::Core::Reporter
       class Protocol
-        # @method initialize
+        # @method initialize(output)
         # @api public
         #
         # @param output [IO] the formatter output
 
-        # @method start
+        # @method start(notification)
         # @api public
         # @group Suite Notifications
         #
@@ -33,9 +33,9 @@ module RSpec
         # This will only be invoked once, and the next one to be invoked
         # is {#example_group_started}.
         #
-        # @param notification [StartNotification]
+        # @param notification [Notifications::StartNotification]
 
-        # @method example_group_started
+        # @method example_group_started(notification)
         # @api public
         # @group Group Notifications
         #
@@ -45,72 +45,81 @@ module RSpec
         # The next method to be invoked after this is {#example_passed},
         # {#example_pending}, or {#example_group_finished}.
         #
-        # @param notification [GroupNotification] containing example_group
-        #   subclass of `RSpec::Core::ExampleGroup`
+        # @param notification [Notifications::GroupNotification] containing example_group
+        #   subclass of {ExampleGroup}
 
-        # @method example_group_finished
+        # @method example_group_finished(notification)
         # @api public
         # @group Group Notifications
         #
         # Invoked at the end of the execution of each example group.
         #
-        # @param notification [GroupNotification] containing example_group
-        #   subclass of `RSpec::Core::ExampleGroup`
+        # @param notification [Notifications::GroupNotification] containing example_group
+        #   subclass of {ExampleGroup}
 
-        # @method example_started
+        # @method example_started(notification)
         # @api public
         # @group Example Notifications
         #
         # Invoked at the beginning of the execution of each example.
         #
-        # @param notification [ExampleNotification] containing example subclass
-        #   of `RSpec::Core::Example`
+        # @param notification [Notifications::ExampleNotification] containing example subclass
+        #   of {Example}
 
-        # @method example_passed
+        # @method example_finished(notification)
+        # @api public
+        # @group Example Notifications
+        #
+        # Invoked at the end of the execution of each example.
+        #
+        # @param notification [Notifications::ExampleNotification] containing example subclass
+        #   of {Example}
+
+        # @method example_passed(notification)
         # @api public
         # @group Example Notifications
         #
         # Invoked when an example passes.
         #
-        # @param notification [ExampleNotification] containing example subclass
-        #   of `RSpec::Core::Example`
+        # @param notification [Notifications::ExampleNotification] containing example subclass
+        #   of {Example}
 
-        # @method example_pending
+        # @method example_pending(notification)
         # @api public
         # @group Example Notifications
         #
         # Invoked when an example is pending.
         #
-        # @param notification [ExampleNotification] containing example subclass
-        #   of `RSpec::Core::Example`
+        # @param notification [Notifications::ExampleNotification] containing example subclass
+        #   of {Example}
 
-        # @method example_failed
+        # @method example_failed(notification)
         # @api public
         # @group Example Notifications
         #
         # Invoked when an example fails.
         #
-        # @param notification [ExampleNotification] containing example subclass
-        #   of `RSpec::Core::Example`
+        # @param notification [Notifications::ExampleNotification] containing example subclass
+        #   of {Example}
 
-        # @method message
+        # @method message(notification)
         # @api public
         # @group Suite Notifications
         #
         # Used by the reporter to send messages to the output stream.
         #
-        # @param notification [MessageNotification] containing message
+        # @param notification [Notifications::MessageNotification] containing message
 
-        # @method stop
+        # @method stop(notification)
         # @api public
         # @group Suite Notifications
         #
         # Invoked after all examples have executed, before dumping post-run
         # reports.
         #
-        # @param notification [NullNotification]
+        # @param notification [Notifications::NullNotification]
 
-        # @method start_dump
+        # @method start_dump(notification)
         # @api public
         # @group Suite Notifications
         #
@@ -119,53 +128,54 @@ module RSpec
         # (BaseTextFormatter then calls {#dump_failures} once for each failed
         # example).
         #
-        # @param notification [NullNotification]
+        # @param notification [Notifications::NullNotification]
 
-        # @method dump_failures
+        # @method dump_failures(notification)
         # @api public
         # @group Suite Notifications
         #
         # Dumps detailed information about each example failure.
         #
-        # @param notification [NullNotification]
+        # @param notification [Notifications::NullNotification]
 
-        # @method dump_summary
+        # @method dump_summary(summary)
         # @api public
         # @group Suite Notifications
         #
         # This method is invoked after the dumping of examples and failures.
         # Each parameter is assigned to a corresponding attribute.
         #
-        # @param summary [SummaryNotification] containing duration,
+        # @param summary [Notifications::SummaryNotification] containing duration,
         #   example_count, failure_count and pending_count
 
-        # @method dump_profile
+        # @method dump_profile(profile)
         # @api public
         # @group Suite Notifications
         #
         # This method is invoked after the dumping the summary if profiling is
         # enabled.
         #
-        # @param profile [ProfileNotification] containing duration,
+        # @param profile [Notifications::ProfileNotification] containing duration,
         #   slowest_examples and slowest_example_groups
 
-        # @method dump_pending
+        # @method dump_pending(notification)
         # @api public
         # @group Suite Notifications
         #
         # Outputs a report of pending examples. This gets invoked
         # after the summary if option is set to do so.
         #
-        # @param notification [NullNotification]
+        # @param notification [Notifications::NullNotification]
 
-        # @method close
+        # @method close(notification)
         # @api public
         # @group Suite Notifications
         #
-        # Invoked at the very end, `close` allows the formatter to clean
-        # up resources, e.g. open streams, etc.
+        # Invoked at the end of a suite run. Allows the formatter to do any
+        # tidying up, but be aware that formatter output streams may be used
+        # elsewhere so don't actually close them.
         #
-        # @param notification [NullNotification]
+        # @param notification [Notifications::NullNotification]
       end
     end
   end

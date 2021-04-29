@@ -1,3 +1,5 @@
+RSpec::Support.require_rspec_support "with_keywords_when_needed"
+
 module RSpec
   module Core
     # Represents some functionality that is shared with multiple example groups.
@@ -5,9 +7,13 @@ module RSpec
     # eval'd when the `SharedExampleGroupModule` instance is included in an example
     # group.
     class SharedExampleGroupModule < Module
-      def initialize(description, definition)
+      # @private
+      attr_reader :definition
+
+      def initialize(description, definition, metadata)
         @description = description
         @definition  = definition
+        @metadata    = metadata
       end
 
       # Provides a human-readable representation of this module.
@@ -20,8 +26,17 @@ module RSpec
       # Our definition evaluates the shared group block in the context of the
       # including example group.
       def included(klass)
-        SharedExampleGroupInclusionStackFrame.with_frame(@description, RSpec::CallerFilter.first_non_rspec_line) do
-          klass.class_exec(&@definition)
+        inclusion_line = klass.metadata[:location]
+        include_in klass, inclusion_line, [], nil
+      end
+
+      # @private
+      def include_in(klass, inclusion_line, args, customization_block)
+        klass.update_inherited_metadata(@metadata) unless @metadata.empty?
+
+        SharedExampleGroupInclusionStackFrame.with_frame(@description, inclusion_line) do
+          RSpec::Support::WithKeywordsWhenNeeded.class_exec(klass, *args, &@definition)
+          klass.class_exec(&customization_block) if customization_block
         end
       end
     end
@@ -30,9 +45,8 @@ module RSpec
     # examples that you wish to use in multiple example groups.
     #
     # When defined, the shared group block is stored for later evaluation.
-    # It can later be included in an example group either explicitly
-    # (using `include_examples`, `include_context` or `it_behaves_like`)
-    # or implicitly (via matching metadata).
+    # It can later be included in an example group explicitly using
+    # `include_examples`, `include_context` or `it_behaves_like`.
     #
     # Named shared example groups are scoped based on where they are
     # defined. Shared groups defined in an example group are available
@@ -47,14 +61,7 @@ module RSpec
       # @overload shared_examples(name, metadata, &block)
       #   @param name [String, Symbol, Module] identifer to use when looking up
       #     this shared group
-      #   @param metadata [Array<Symbol>, Hash] metadata to attach to this
-      #     group; any example group with matching metadata will automatically
-      #     include this shared example group.
-      #   @param block The block to be eval'd
-      # @overload shared_examples(metadata, &block)
-      #   @param metadata [Array<Symbol>, Hash] metadata to attach to this
-      #     group; any example group with matching metadata will automatically
-      #     include this shared example group.
+      #   @param metadata [Array<Symbol>, Hash] metadata to attach to this group
       #   @param block The block to be eval'd
       #
       # Stores the block for later use. The block will be evaluated
@@ -68,7 +75,7 @@ module RSpec
       #     end
       #   end
       #
-      #   describe Account do
+      #   RSpec.describe Account do
       #     it_behaves_like "auditable" do
       #       let(:auditable) { Account.new }
       #     end
@@ -79,7 +86,7 @@ module RSpec
       # @see ExampleGroup.include_context
       def shared_examples(name, *args, &block)
         top_level = self == ExampleGroup
-        if top_level && RSpec.thread_local_metadata[:in_example_group]
+        if top_level && RSpec::Support.thread_local_data[:in_example_group]
           raise "Creating isolated shared examples from within a context is " \
                 "not allowed. Remove `RSpec.` prefix or move this to a " \
                 "top-level scope."
@@ -104,51 +111,27 @@ module RSpec
             alias shared_examples_for shared_examples
           end
         end
-
-        # @private
-        def self.exposed_globally?
-          @exposed_globally ||= false
-        end
-
-        # @api private
-        #
-        # Adds the top level DSL methods to Module and the top level binding.
-        def self.expose_globally!
-          return if exposed_globally?
-          Core::DSL.change_global_dsl(&definitions)
-          @exposed_globally = true
-        end
-
-        # @api private
-        #
-        # Removes the top level DSL methods to Module and the top level binding.
-        def self.remove_globally!
-          return unless exposed_globally?
-
-          Core::DSL.change_global_dsl do
-            undef shared_examples
-            undef shared_context
-            undef shared_examples_for
-          end
-
-          @exposed_globally = false
-        end
       end
 
       # @private
       class Registry
         def add(context, name, *metadata_args, &block)
-          ensure_block_has_source_location(block) { CallerFilter.first_non_rspec_line }
-
-          if valid_name?(name)
-            warn_if_key_taken context, name, block
-            shared_example_groups[context][name] = block
-          else
-            metadata_args.unshift name
+          unless block
+            RSpec.warning "Shared example group #{name} was defined without a "\
+                          "block and will have no effect. Please define a "\
+                          "block or remove the definition."
           end
 
-          return if metadata_args.empty?
-          RSpec.configuration.include SharedExampleGroupModule.new(name, block), *metadata_args
+          unless valid_name?(name)
+            raise ArgumentError, "Shared example group names can only be a string, " \
+                                 "symbol or module but got: #{name.inspect}"
+          end
+
+          warn_if_key_taken context, name, block
+
+          metadata = Metadata.build_hash_from(metadata_args)
+          shared_module = SharedExampleGroupModule.new(name, block, metadata)
+          shared_example_groups[context][name] = shared_module
         end
 
         def find(lookup_contexts, name)
@@ -174,30 +157,36 @@ module RSpec
         end
 
         def warn_if_key_taken(context, key, new_block)
-          existing_block = shared_example_groups[context][key]
+          existing_module = shared_example_groups[context][key]
+          return unless existing_module
 
-          return unless existing_block
+          old_definition_location = formatted_location existing_module.definition
+          new_definition_location = formatted_location new_block
+          loaded_spec_files = RSpec.configuration.loaded_spec_files
 
-          RSpec.warn_with <<-WARNING.gsub(/^ +\|/, ''), :call_site => nil
-            |WARNING: Shared example group '#{key}' has been previously defined at:
-            |  #{formatted_location existing_block}
-            |...and you are now defining it at:
-            |  #{formatted_location new_block}
-            |The new definition will overwrite the original one.
-          WARNING
+          if loaded_spec_files.include?(new_definition_location) && old_definition_location == new_definition_location
+            RSpec.warn_with <<-WARNING.gsub(/^ +\|/, ''), :call_site => nil
+              |WARNING: Your shared example group, '#{key}', defined at:
+              | #{old_definition_location}
+              |was automatically loaded by RSpec because the file name
+              |matches the configured autoloading pattern (#{RSpec.configuration.pattern}),
+              |and is also being required from somewhere else. To fix this
+              |warning, either rename the file to not match the pattern, or
+              |do not explicitly require the file.
+            WARNING
+          else
+            RSpec.warn_with <<-WARNING.gsub(/^ +\|/, ''), :call_site => nil
+              |WARNING: Shared example group '#{key}' has been previously defined at:
+              |  #{old_definition_location}
+              |...and you are now defining it at:
+              |  #{new_definition_location}
+              |The new definition will overwrite the original one.
+            WARNING
+          end
         end
 
         def formatted_location(block)
-          block.source_location.join ":"
-        end
-
-        if Proc.method_defined?(:source_location)
-          def ensure_block_has_source_location(_block); end
-        else # for 1.8.7
-          def ensure_block_has_source_location(block)
-            source_location = yield.split(':')
-            block.extend Module.new { define_method(:source_location) { source_location } }
-          end
+          block.source_location.join(":")
         end
       end
     end
