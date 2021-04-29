@@ -1,76 +1,150 @@
-require 'spec_helper'
 require 'ostruct'
-require 'rspec/core/drb_options'
+require 'rspec/core/drb'
 
-describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolated_home => true do
+RSpec.describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolated_home => true do
   include ConfigOptionsHelper
 
-  it "warns when HOME env var is not set", :unless => (RUBY_PLATFORM == 'java') do
+  # On Ruby 2.4, `File.expand("~")` works even if `ENV['HOME']` is not set.
+  # But on earlier versions, it fails.
+  it "warns when HOME env var is not set", :skip => (RUBY_PLATFORM == 'java' || RSpec::Support::OS.windows? || RUBY_VERSION >= '2.4') do
     without_env_vars 'HOME' do
-      coo = RSpec::Core::ConfigurationOptions.new([])
-      coo.should_receive(:warn)
-      coo.parse_options
+      expect_warning_with_call_site(__FILE__, __LINE__ + 1)
+      RSpec::Core::ConfigurationOptions.new([]).options
     end
   end
 
-  it "duplicates the arguments array" do
+  it "does not mutate the provided args array" do
     args = ['-e', 'some spec']
-    coo = RSpec::Core::ConfigurationOptions.new(args)
-    coo.parse_options
+    RSpec::Core::ConfigurationOptions.new(args).options
     expect(args).to eq(['-e', 'some spec'])
   end
 
   describe "#configure" do
+    let(:config) { RSpec::Core::Configuration.new }
+
+    it "configures deprecation_stream before loading requires (since required files may issue deprecations)" do
+      opts = config_options_object(*%w[--deprecation-out path/to/log --require foo])
+      configuration = instance_double(RSpec::Core::Configuration).as_null_object
+
+      opts.configure(configuration)
+
+      expect(configuration).to have_received(:force).with(:deprecation_stream => "path/to/log").ordered
+      expect(configuration).to have_received(:requires=).ordered
+    end
+
+    it "configures deprecation_stream before configuring filter_manager" do
+      opts = config_options_object(*%w[--deprecation-out path/to/log --tag foo])
+      filter_manager = instance_double(RSpec::Core::FilterManager).as_null_object
+      configuration = instance_double(RSpec::Core::Configuration, :filter_manager => filter_manager).as_null_object
+
+      opts.configure(configuration)
+
+      expect(configuration).to have_received(:force).with(:deprecation_stream => "path/to/log").ordered
+      expect(filter_manager).to have_received(:include).with(:foo => true).ordered
+    end
+
+    it "configures deprecation_stream before configuring formatters" do
+      opts = config_options_object(*%w[--deprecation-out path/to/log --format doc])
+      configuration = instance_double(RSpec::Core::Configuration).as_null_object
+
+      opts.configure(configuration)
+
+      expect(configuration).to have_received(:force).with(:deprecation_stream => "path/to/log").ordered
+      expect(configuration).to have_received(:add_formatter).ordered
+    end
+
     it "sends libs before requires" do
       opts = config_options_object(*%w[--require a/path -I a/lib])
-      config = double("config").as_null_object
-      config.should_receive(:libs=).ordered
-      config.should_receive(:setup_load_path_and_require).ordered
+      configuration = double("config").as_null_object
+      expect(configuration).to receive(:libs=).ordered
+      expect(configuration).to receive(:requires=).ordered
+      opts.configure(configuration)
+    end
+
+    it "loads requires before loading specs" do
+      opts = config_options_object(*%w[-rspec_helper])
+      expect(config).to receive(:requires=).ordered
+      expect(config).to receive(:get_files_to_run).ordered
       opts.configure(config)
+      config.files_to_run
     end
 
     it "sets up load path and requires before formatter" do
       opts = config_options_object(*%w[--require a/path -f a/formatter])
-      config = double("config").as_null_object
-      config.should_receive(:setup_load_path_and_require).ordered
-      config.should_receive(:add_formatter).ordered
+      configuration = double("config").as_null_object
+      expect(configuration).to receive(:requires=).ordered
+      expect(configuration).to receive(:add_formatter).ordered
+      opts.configure(configuration)
+    end
+
+    it "sets default_path before loading specs" do
+      opts = config_options_object(*%w[--default-path spec])
+      expect(config).to receive(:force).with(:default_path => 'spec').ordered
+      expect(config).to receive(:get_files_to_run).ordered
+      opts.configure(config)
+      config.files_to_run
+    end
+
+    it "sets `files_or_directories_to_run` before `requires` so users can check `files_to_run` in a spec_helper loaded by `--require`" do
+      opts = config_options_object(*%w[--require spec_helper])
+      expect(config).to receive(:files_or_directories_to_run=).ordered
+      expect(config).to receive(:requires=).ordered
       opts.configure(config)
     end
 
-    it "sends default_path before files_or_directories_to_run" do
-      opts = config_options_object(*%w[--default_path spec])
-      config = double("config").as_null_object
-      config.should_receive(:force).with(:default_path => 'spec').ordered
-      config.should_receive(:files_or_directories_to_run=).ordered
+    it "sets default_path before `files_or_directories_to_run` since it relies on it" do
+      opts = config_options_object(*%w[--default-path spec])
+      expect(config).to receive(:force).with(:default_path => 'spec').ordered
+      expect(config).to receive(:files_or_directories_to_run=).ordered
       opts.configure(config)
     end
 
-    it "sends pattern before files_or_directories_to_run" do
-      opts = config_options_object(*%w[--pattern **/*.spec])
-      config = double("config").as_null_object
-      config.should_receive(:force).with(:pattern => '**/*.spec').ordered
-      config.should_receive(:files_or_directories_to_run=).ordered
+    it 'configures the seed (via `order`) before requires so that required files can use the configured seed' do
+      opts = config_options_object(*%w[ --seed 1234 --require spec_helper ])
+
+      expect(config).to receive(:force).with(:order => "rand:1234").ordered
+      expect(config).to receive(:requires=).ordered
+
       opts.configure(config)
+    end
+
+    it 'configures `only_failures` before `files_or_directories_to_run` since it affects loaded files' do
+      opts = config_options_object(*%w[ --only-failures ])
+      expect(config).to receive(:force).with(:only_failures => true).ordered
+      expect(config).to receive(:files_or_directories_to_run=).ordered
+      opts.configure(config)
+    end
+
+    { "pattern" => :pattern, "exclude-pattern" => :exclude_pattern }.each do |flag, attr|
+      it "sets #{attr} before `requires` so users can check `files_to_run` in a `spec_helper` loaded by `--require`" do
+        opts = config_options_object(*%W[--require spec_helpe --#{flag} **/*.spec])
+        expect(config).to receive(:force).with(attr => '**/*.spec').ordered
+        expect(config).to receive(:requires=).ordered
+        opts.configure(config)
+      end
     end
 
     it "assigns inclusion_filter" do
       opts = config_options_object(*%w[--tag awesome])
-      config = RSpec::Core::Configuration.new
       opts.configure(config)
-      expect(config.inclusion_filter).to have_key(:awesome)
+      expect(config.inclusion_filter.rules).to have_key(:awesome)
     end
 
     it "merges the :exclusion_filter option with the default exclusion_filter" do
       opts = config_options_object(*%w[--tag ~slow])
-      config = RSpec::Core::Configuration.new
       opts.configure(config)
-      expect(config.exclusion_filter).to have_key(:slow)
+      expect(config.exclusion_filter.rules).to have_key(:slow)
     end
 
-    it "forces color_enabled" do
-      opts = config_options_object(*%w[--color])
-      config = RSpec::Core::Configuration.new
-      config.should_receive(:force).with(:color => true)
+    it "forces force_color" do
+      opts = config_options_object(*%w[--force-color])
+      expect(config).to receive(:force).with(:color_mode => :on)
+      opts.configure(config)
+    end
+
+    it "forces no_color" do
+      opts = config_options_object(*%w[--no-color])
+      expect(config).to receive(:force).with(:color_mode => :off)
       opts.configure(config)
     end
 
@@ -78,15 +152,14 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
       ["--failure-exit-code", "3", :failure_exit_code, 3 ],
       ["--pattern", "foo/bar", :pattern, "foo/bar"],
       ["--failure-exit-code", "37", :failure_exit_code, 37],
-      ["--default_path", "behavior", :default_path, "behavior"],
+      ["--default-path", "behavior", :default_path, "behavior"],
       ["--order", "rand", :order, "rand"],
       ["--seed", "37", :order, "rand:37"],
       ["--drb-port", "37", :drb_port, 37]
     ].each do |cli_option, cli_value, config_key, config_value|
       it "forces #{config_key}" do
-        opts = config_options_object(*[cli_option, cli_value].compact)
-        config = RSpec::Core::Configuration.new
-        config.should_receive(:force) do |pair|
+        opts = config_options_object(cli_option, cli_value)
+        expect(config).to receive(:force) do |pair|
           expect(pair.keys.first).to eq(config_key)
           expect(pair.values.first).to eq(config_value)
         end
@@ -94,19 +167,11 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
       end
     end
 
-    it "sets debug directly" do
-      opts = config_options_object("--debug")
-      config = RSpec::Core::Configuration.new
-      config.should_receive(:debug=).with(true)
-      opts.configure(config)
-    end
-
     it "merges --require specified by multiple configuration sources" do
       with_env_vars 'SPEC_OPTS' => "--require file_from_env" do
         opts = config_options_object(*%w[--require file_from_opts])
-        config = RSpec::Core::Configuration.new
-        config.should_receive(:require).with("file_from_opts")
-        config.should_receive(:require).with("file_from_env")
+        expect(config).to receive(:require).with("file_from_opts")
+        expect(config).to receive(:require).with("file_from_env")
         opts.configure(config)
       end
     end
@@ -114,32 +179,33 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
     it "merges --I specified by multiple configuration sources" do
       with_env_vars 'SPEC_OPTS' => "-I dir_from_env" do
         opts = config_options_object(*%w[-I dir_from_opts])
-        config = RSpec::Core::Configuration.new
-        config.should_receive(:libs=).with(["dir_from_opts", "dir_from_env"])
+        expect(config).to receive(:libs=).with(["dir_from_opts", "dir_from_env"])
         opts.configure(config)
+      end
+    end
+
+    %w[ --only-failures --next-failure -n].each do |option|
+      describe option do
+        it "changes `config.only_failures?` to true" do
+          opts = config_options_object(option)
+
+          expect {
+            opts.configure(config)
+          }.to change(config, :only_failures?).from(a_falsey_value).to(true)
+        end
       end
     end
   end
 
-  describe "-c, --color, and --colour" do
-    it "sets :color => true" do
-      expect(parse_options('-c')).to include(:color => true)
-      expect(parse_options('--color')).to include(:color => true)
-      expect(parse_options('--colour')).to include(:color => true)
+  describe "--no-color" do
+    it "sets :color_mode => :off" do
+      expect(parse_options('--no-color')).to include(:color_mode => :off)
     end
   end
 
-  describe "--no-color" do
-    it "sets :color => false" do
-      expect(parse_options('--no-color')).to include(:color => false)
-    end
-
-    it "overrides previous :color => true" do
-      expect(parse_options('--color', '--no-color')).to include(:color => false)
-    end
-
-    it "gets overriden by a subsequent :color => true" do
-      expect(parse_options('--no-color', '--color')).to include(:color => true)
+  describe "--force-color" do
+    it "sets :color_mode => :on" do
+      expect(parse_options('--force-color')).to include(:color_mode => :on)
     end
   end
 
@@ -188,18 +254,6 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
     end
   end
 
-  describe '--line_number' do
-    it "sets :line_number" do
-      expect(parse_options('-l','3')).to include(:line_numbers => ['3'])
-      expect(parse_options('--line_number','3')).to include(:line_numbers => ['3'])
-    end
-
-    it "can be specified multiple times" do
-      expect(parse_options('-l','3', '-l', '6')).to include(:line_numbers => ['3', '6'])
-      expect(parse_options('--line_number','3', '--line_number', '6')).to include(:line_numbers => ['3', '6'])
-    end
-  end
-
   describe "--example" do
     it "sets :full_description" do
       expect(parse_options('--example','foo')).to include(:full_description => [/foo/])
@@ -214,20 +268,17 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
     end
   end
 
-  describe "--debug, -d" do
-    it "sets :debug => true" do
-      expect(parse_options("--debug")).to include(:debug => true)
-      expect(parse_options("-d")).to include(:debug => true)
-    end
-  end
-
   describe "--fail-fast" do
-    it "defaults to false" do
-      expect(parse_options[:fail_fast]).to be_false
+    it "defaults to nil" do
+      expect(parse_options[:fail_fast]).to be(nil)
     end
 
-    it "sets fail_fast on config" do
-      expect(parse_options("--fail-fast")[:fail_fast]).to be_true
+    it "sets fail_fast to 1 on config" do
+      expect(parse_options("--fail-fast")[:fail_fast]).to be(1)
+    end
+
+    it "sets fail_fast to false on config" do
+      expect(parse_options("--no-fail-fast")[:fail_fast]).to be(false)
     end
   end
 
@@ -243,46 +294,33 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
     end
   end
 
+  describe "--error-exit-code" do
+    it "sets :error_exit_code" do
+      expect(parse_options('--error-exit-code', '0')).to include(:error_exit_code => 0)
+      expect(parse_options('--error-exit-code', '1')).to include(:error_exit_code => 1)
+      expect(parse_options('--error-exit-code', '2')).to include(:error_exit_code => 2)
+    end
+
+    it "overrides previous :error_exit_code" do
+      expect(parse_options('--error-exit-code', '2', '--error-exit-code', '3')).to include(:error_exit_code => 3)
+    end
+  end
+
+  describe "--dry-run" do
+    it "defaults to nil" do
+      expect(parse_options[:dry_run]).to be(nil)
+    end
+
+    it "sets dry_run on config" do
+      expect(parse_options("--dry-run")[:dry_run]).to be(true)
+    end
+  end
+
   describe "--options" do
     it "sets :custom_options_file" do
       expect(parse_options(*%w[-O my.opts])).to include(:custom_options_file => "my.opts")
       expect(parse_options(*%w[--options my.opts])).to include(:custom_options_file => "my.opts")
     end
-  end
-
-  describe "--drb, -X" do
-    context "combined with --debug" do
-      it "turns off the debugger if --drb is specified first" do
-        expect(config_options_object("--drb", "--debug").drb_argv).not_to include("--debug")
-        expect(config_options_object("--drb", "-d"     ).drb_argv).not_to include("--debug")
-        expect(config_options_object("-X",    "--debug").drb_argv).not_to include("--debug")
-        expect(config_options_object("-X",    "-d"     ).drb_argv).not_to include("--debug")
-      end
-
-      it "turns off the debugger option if --drb is specified later" do
-        expect(config_options_object("--debug", "--drb").drb_argv).not_to include("--debug")
-        expect(config_options_object("-d",      "--drb").drb_argv).not_to include("--debug")
-        expect(config_options_object("--debug", "-X"   ).drb_argv).not_to include("--debug")
-        expect(config_options_object("-d",      "-X"   ).drb_argv).not_to include("--debug")
-      end
-
-      it "turns off the debugger option if --drb is specified in the options file" do
-        File.open("./.rspec", "w") {|f| f << "--drb"}
-        expect(config_options_object("--debug").drb_argv).not_to include("--debug")
-        expect(config_options_object("-d"     ).drb_argv).not_to include("--debug")
-      end
-
-      it "turns off the debugger option if --debug is specified in the options file" do
-        File.open("./.rspec", "w") {|f| f << "--debug"}
-        expect(config_options_object("--drb").drb_argv).not_to include("--debug")
-        expect(config_options_object("-X"   ).drb_argv).not_to include("--debug")
-      end
-    end
-
-    it "does not send --drb back to the parser after parsing options" do
-      expect(config_options_object("--drb", "--color").drb_argv).not_to include("--drb")
-    end
-
   end
 
   describe "--no-drb" do
@@ -299,10 +337,9 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
     end
   end
 
-
   describe "files_or_directories_to_run" do
-    it "parses files from '-c file.rb dir/file.rb'" do
-      expect(parse_options("-c", "file.rb", "dir/file.rb")).to include(
+    it "parses files from '--no-color file.rb dir/file.rb'" do
+      expect(parse_options("--no-color", "file.rb", "dir/file.rb")).to include(
         :files_or_directories_to_run => ["file.rb", "dir/file.rb"]
       )
     end
@@ -317,41 +354,146 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
       )
     end
 
+    it "parses file names that look like `default-path` option" do
+      expect(parse_options("spec/default_path_spec.rb")).to include(
+        :files_or_directories_to_run => ["spec/default_path_spec.rb"]
+      )
+    end
+
     it "provides no files or directories if spec directory does not exist" do
-      FileTest.stub(:directory?).with("spec").and_return false
+      allow(FileTest).to receive(:directory?).with("spec").and_return false
       expect(parse_options()).to include(:files_or_directories_to_run => [])
     end
   end
 
   describe "default_path" do
     it "gets set before files_or_directories_to_run" do
-      config = double("config").as_null_object
-      config.should_receive(:force).with(:default_path => 'foo').ordered
-      config.should_receive(:files_or_directories_to_run=).ordered
-      opts = config_options_object("--default_path", "foo")
+      config = RSpec::Core::Configuration.new
+      expect(config).to receive(:force).with(:default_path => 'foo').ordered
+      expect(config).to receive(:get_files_to_run).ordered
+      opts = config_options_object("--default-path", "foo")
       opts.configure(config)
+      config.files_to_run
     end
   end
 
-  describe "#filter_manager" do
-    it "returns the same object as RSpec::configuration.filter_manager" do
-      expect(config_options_object.filter_manager).to be(RSpec::configuration.filter_manager)
+  describe "invalid options" do
+    def expect_parsing_to_fail_mentioning_source(source, options=[])
+      expect {
+        parse_options(*options)
+      }.to raise_error(SystemExit).and output(a_string_including(
+        "invalid option: --foo_bar (defined in #{source})",
+        "Please use --help for a listing of valid options"
+      )).to_stderr
+    end
+
+    %w[ ~/.rspec ./.rspec ./.rspec-local ].each do |file_name|
+      context "defined in #{file_name}" do
+        it "mentions the file name in the error so users know where to look for it" do
+          file_name = File.expand_path(file_name) if file_name.start_with?("~")
+          File.open(File.expand_path(file_name), "w") { |f| f << "--foo_bar" }
+          expect_parsing_to_fail_mentioning_source(file_name)
+        end
+      end
+    end
+
+    context "defined in $XDG_CONFIG_HOME/rspec/options" do
+      it "mentions the file name in the error so users know where to look for it" do
+        file_name = File.expand_path("~/.config/rspec/options")
+        create_fixture_file(file_name, "--foo_bar")
+        expect_parsing_to_fail_mentioning_source(file_name)
+      end
+    end
+
+    context "defined in SPEC_OPTS" do
+      it "mentions ENV['SPEC_OPTS'] as the source in the error so users know where to look for it" do
+        with_env_vars 'SPEC_OPTS' => "--foo_bar" do
+          expect_parsing_to_fail_mentioning_source("ENV['SPEC_OPTS']")
+        end
+      end
+    end
+
+    context "defined in a custom file" do
+      it "mentions the custom file as the source of the error so users know where to look for it" do
+        File.open("./custom.opts", "w") {|f| f << "--foo_bar"}
+
+        expect_parsing_to_fail_mentioning_source("./custom.opts", %w[-O ./custom.opts])
+      end
+
+      context "passed at the command line" do
+        it "does not mention the source since it is obvious where it came from" do
+          expect {
+            parse_options("--foo_bar")
+          }.to raise_error(SystemExit).and output(a_string_including(
+            "invalid option: --foo_bar\n",
+            "Please use --help for a listing of valid options"
+          )).to_stderr
+        end
+      end
     end
   end
 
-  describe "sources: ~/.rspec, ./.rspec, ./.rspec-local, custom, CLI, and SPEC_OPTS" do
-    it "merges global, local, SPEC_OPTS, and CLI" do
-      File.open("./.rspec", "w") {|f| f << "--line 37"}
-      File.open("./.rspec-local", "w") {|f| f << "--format global"}
-      File.open(File.expand_path("~/.rspec"), "w") {|f| f << "--color"}
-      with_env_vars 'SPEC_OPTS' => "--debug --example 'foo bar'" do
+  describe "sources: $XDG_CONFIG_HOME/rspec/options, ~/.rspec, ./.rspec, ./.rspec-local, custom, CLI, and SPEC_OPTS" do
+    it "merges both global, local, SPEC_OPTS, and CLI" do
+      create_fixture_file("./.rspec", "--require some_file")
+      create_fixture_file("./.rspec-local", "--format global")
+      create_fixture_file("~/.rspec", "--force-color")
+      create_fixture_file("~/.config/rspec/options", "--order defined")
+      with_env_vars 'SPEC_OPTS' => "--example 'foo bar'" do
         options = parse_options("--drb")
-        expect(options[:color]).to be_true
-        expect(options[:line_numbers]).to eq(["37"])
-        expect(options[:debug]).to be_true
+        # $XDG_CONFIG_HOME/rspec/options file ("order") is read, but ~/.rspec
+        # file ("color") is not read because ~/.rspec has lower priority over
+        # the file in the XDG config directory.
+        expect(options[:order]).to eq("defined")
+        expect(options[:color_mode]).to be_nil
+
+        expect(options[:requires]).to eq(["some_file"])
         expect(options[:full_description]).to eq([/foo\ bar/])
-        expect(options[:drb]).to be_true
+        expect(options[:drb]).to be(true)
         expect(options[:formatters]).to eq([['global']])
+      end
+    end
+
+    it "reads ~/.rspec if $XDG_CONFIG_HOME/rspec/options is not found" do
+      create_fixture_file("~/.rspec", "--force-color")
+
+      options = parse_options()
+      expect(options[:color_mode]).to eq(:on)
+      expect(options[:order]).to be_nil
+    end
+
+    it "does not read ~/.rspec if $XDG_CONFIG_HOME/rspec/options is present" do
+      create_fixture_file("~/.rspec", "--force-color")
+      create_fixture_file("~/.config/rspec/options", "--order defined")
+
+      options = parse_options()
+      expect(options[:color_mode]).to be_nil
+      expect(options[:order]).to eq("defined")
+    end
+
+    it "uses $XDG_CONFIG_HOME environment variable when set to find XDG global options" do
+      create_fixture_file("~/.config/rspec/options", "--format default_xdg")
+      create_fixture_file("~/.custom-config/rspec/options", "--format overridden_xdg")
+
+      with_env_vars 'XDG_CONFIG_HOME' => "~/.custom-config" do
+        options = parse_options()
+        expect(options[:formatters]).to eq([['overridden_xdg']])
+      end
+
+      without_env_vars 'XDG_CONFIG_HOME' do
+        options = parse_options()
+        expect(options[:formatters]).to eq([['default_xdg']])
+      end
+    end
+
+    it 'ignores file or dir names put in one of the option files or in SPEC_OPTS, since those are for persistent options' do
+      create_fixture_file("./.rspec", "path/to/spec_1.rb" )
+      create_fixture_file("./.rspec-local", "path/to/spec_2.rb" )
+      create_fixture_file("~/.rspec", "path/to/spec_3.rb")
+      create_fixture_file("~/.config/rspec/options", "path/to/spec_4.rb")
+      with_env_vars 'SPEC_OPTS' => "path/to/spec_4.rb" do
+        options = parse_options()
+        expect(options[:files_or_directories_to_run]).to eq([])
       end
     end
 
@@ -362,20 +504,31 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
     end
 
     it "prefers CLI over file options" do
-      File.open("./.rspec", "w") {|f| f << "--format project"}
-      File.open(File.expand_path("~/.rspec"), "w") {|f| f << "--format global"}
+      create_fixture_file("./.rspec", "--format project")
+      create_fixture_file("~/.rspec", "--format global")
+      create_fixture_file("~/.config/rspec/options", "--format xdg")
       expect(parse_options("--format", "cli")[:formatters]).to eq([['cli']])
     end
 
+    it "prefers CLI over file options for filter inclusion" do
+      create_fixture_file("./.rspec", "--tag ~slow")
+      opts = config_options_object("--tag", "slow")
+      config = RSpec::Core::Configuration.new
+      opts.configure(config)
+      expect(config.inclusion_filter.rules).to have_key(:slow)
+      expect(config.exclusion_filter.rules).not_to have_key(:slow)
+    end
+
     it "prefers project file options over global file options" do
-      File.open("./.rspec", "w") {|f| f << "--format project"}
-      File.open(File.expand_path("~/.rspec"), "w") {|f| f << "--format global"}
+      create_fixture_file("./.rspec", "--format project")
+      create_fixture_file("~/.rspec", "--format global")
+      create_fixture_file("~/.config/rspec/options", "--format xdg")
       expect(parse_options[:formatters]).to eq([['project']])
     end
 
     it "prefers local file options over project file options" do
-      File.open("./.rspec-local", "w") {|f| f << "--format local"}
-      File.open("./.rspec", "w") {|f| f << "--format global"}
+      create_fixture_file("./.rspec-local", "--format local")
+      create_fixture_file("./.rspec", "--format global")
       expect(parse_options[:formatters]).to eq([['local']])
     end
 
@@ -391,16 +544,17 @@ describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :isolat
 
     context "with custom options file" do
       it "ignores project and global options files" do
-        File.open("./.rspec", "w") {|f| f << "--format project"}
-        File.open(File.expand_path("~/.rspec"), "w") {|f| f << "--format global"}
-        File.open("./custom.opts", "w") {|f| f << "--color"}
+        create_fixture_file("./.rspec", "--format project")
+        create_fixture_file("~/.rspec", "--format global")
+        create_fixture_file("~/.config/rspec/options", "--format xdg")
+        create_fixture_file("./custom.opts", "--force-color")
         options = parse_options("-O", "./custom.opts")
         expect(options[:format]).to be_nil
-        expect(options[:color]).to be_true
+        expect(options[:color_mode]).to eq(:on)
       end
 
       it "parses -e 'full spec description'" do
-        File.open("./custom.opts", "w") {|f| f << "-e 'The quick brown fox jumps over the lazy dog'"}
+        create_fixture_file("./custom.opts", "-e 'The quick brown fox jumps over the lazy dog'")
         options = parse_options("-O", "./custom.opts")
         expect(options[:full_description]).to eq([/The\ quick\ brown\ fox\ jumps\ over\ the\ lazy\ dog/])
       end

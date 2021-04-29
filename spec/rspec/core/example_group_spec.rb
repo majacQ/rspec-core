@@ -1,103 +1,317 @@
-require 'spec_helper'
-
-class SelfObserver
-  def self.cache
-    @cache ||= []
-  end
-
-  def initialize
-    self.class.cache << self
-  end
-end
-
 module RSpec::Core
-  describe ExampleGroup do
+  RSpec.describe ExampleGroup do
     it_behaves_like "metadata hash builder" do
       def metadata_hash(*args)
-        group = ExampleGroup.describe('example description', *args)
+        group = RSpec.describe('example description', *args)
         group.metadata
       end
+    end
+
+    %w[ expect double spy ].each do |method|
+      context "when calling `#{method}`, an example API, on an example group" do
+        it "tells the user they are in the wrong scope for that API" do
+          expect {
+            RSpec.describe { __send__(method, "foo") }
+          }.to raise_error(ExampleGroup::WrongScopeError)
+        end
+      end
+    end
+
+    %w[ describe context let before it it_behaves_like ].each do |method|
+      context "when calling `#{method}`, an example group API, from within an example" do
+        it "tells the user they are in the wrong scope for that API" do
+          ex = nil
+
+          RSpec.describe do
+            ex = example { __send__(method, "foo") }
+          end.run
+
+          expect(ex).to fail_with(ExampleGroup::WrongScopeError)
+        end
+      end
+    end
+
+    it "surfaces NameError from an example group for other missing APIs, like normal" do
+      expect {
+        RSpec.describe { foobar }
+      }.to raise_error(NameError, /foobar/)
+    end
+
+    it "surfaces NameError from an example for other missing APIs, like normal" do
+      ex = nil
+
+      RSpec.describe do
+        ex = example { foobar }
+      end.run
+
+      expect(ex).to fail_with(NameError)
     end
 
     context "when RSpec.configuration.format_docstrings is set to a block" do
       it "formats the description with that block" do
         RSpec.configuration.format_docstrings { |s| s.upcase }
-        group = ExampleGroup.describe(' an example ')
+        group = RSpec.describe(' an example ')
         expect(group.description).to eq(' AN EXAMPLE ')
       end
     end
 
-    context 'when RSpec.configuration.treat_symbols_as_metadata_keys_with_true_values is set to false' do
-      before(:each) do
-        RSpec.configure { |c| c.treat_symbols_as_metadata_keys_with_true_values = false }
+    it 'does not treat the first argument as a metadata key even if it is a symbol' do
+      group = RSpec.describe(:symbol)
+      expect(group.metadata).not_to include(:symbol)
+    end
+
+    it 'treats the first argument as part of the description when it is a symbol' do
+      group = RSpec.describe(:symbol)
+      expect(group.description).to eq("symbol")
+    end
+
+    describe "constant naming" do
+      around do |ex|
+        before_constants = RSpec::ExampleGroups.constants
+        ex.run
+        after_constants = RSpec::ExampleGroups.constants
+
+        (after_constants - before_constants).each do |name|
+          RSpec::ExampleGroups.send(:remove_const, name)
+        end
       end
 
-      it 'processes string args as part of the description' do
-        group = ExampleGroup.describe("some", "separate", "strings")
-        expect(group.description).to eq("some separate strings")
+      RSpec::Matchers.define :have_class_const do |class_name, _|
+        match do |group|
+          group.name == "RSpec::ExampleGroups::#{class_name}" &&
+          group == class_name.split('::').inject(RSpec::ExampleGroups) do |mod, name|
+            mod.const_get(name)
+          end
+        end
       end
 
-      it 'processes symbol args as part of the description' do
-        Kernel.stub(:warn) # to silence Symbols as args warning
-        group = ExampleGroup.describe(:some, :separate, :symbols)
-        expect(group.description).to eq("some separate symbols")
+      it 'gives groups friendly human readable class names' do
+        stub_const("MyGem::Klass", Class.new)
+        parent = RSpec.describe(MyGem::Klass)
+        expect(parent).to have_class_const("MyGemKlass")
+      end
+
+      it 'nests constants to match the group nesting' do
+        grandparent = RSpec.describe("The grandparent")
+        parent      = grandparent.describe("the parent")
+        child       = parent.describe("the child")
+
+        expect(parent).to have_class_const("TheGrandparent::TheParent")
+        expect(child).to have_class_const("TheGrandparent::TheParent::TheChild")
+      end
+
+      it 'removes non-ascii characters from the const name since some rubies barf on that' do
+        group = RSpec.describe("A chinese character: 们")
+        expect(group).to have_class_const("AChineseCharacter")
+      end
+
+      it 'prefixes the const name with "Nested" if needed to make a valid const' do
+        expect {
+          ExampleGroup.const_set("1B", Object.new)
+        }.to raise_error(NameError)
+
+        group = RSpec.describe("1B")
+        expect(group).to have_class_const("Nested1B")
+      end
+
+      it 'does not warn when defining a Config example group (since RbConfig triggers warnings when Config is referenced)' do
+        expect { RSpec.describe("Config") }.not_to output.to_stderr
+      end
+
+      it 'ignores top level constants that have the same name' do
+        parent = RSpec.describe("Some Parent Group")
+        child  = parent.describe("Hash")
+        # This would be `SomeParentGroup::Hash_2` if we didn't ignore the top level `Hash`
+        expect(child).to have_class_const("SomeParentGroup::Hash")
+      end
+
+      it 'disambiguates name collisions by appending a number' do
+        groups = 10.times.map { RSpec.describe("Collision") }
+        expect(groups[0]).to have_class_const("Collision")
+        expect(groups[1]).to have_class_const("Collision_2")
+        expect(groups[8]).to have_class_const("Collision_9")
+        expect(groups[9]).to have_class_const("Collision_10")
+      end
+
+      it 'identifies unnamed groups as "Anonymous"' do
+        # Wrap the anonymous group is a uniquely named one,
+        # so the presence of another anonymous group in our
+        # test suite doesn't cause an unexpected number
+        # to be appended.
+        group    = RSpec.describe("name of unnamed group")
+        subgroup = group.describe
+        expect(subgroup).to have_class_const("NameOfUnnamedGroup::Anonymous")
+      end
+
+      it 'assigns the const before evaling the group so error messages include the name' do
+        expect {
+          RSpec.describe("Calling an undefined method") { foo }
+        }.to raise_error(/ExampleGroups::CallingAnUndefinedMethod/)
+      end
+
+      it 'does not have problems with example groups named "Core"' do
+        RSpec.describe("Core")
+        expect(defined?(::RSpec::ExampleGroups::Core)).to be
+
+        # The original bug was triggered when a group was defined AFTER one named `Core`,
+        # due to it not using the fully qualified `::RSpec::Core::ExampleGroup` constant.
+        group = RSpec.describe("Another group")
+        expect(group).to have_class_const("AnotherGroup")
+      end
+
+      it 'does not have problems with example groups named "RSpec"' do
+        RSpec.describe("RSpec")
+        expect(defined?(::RSpec::ExampleGroups::RSpec)).to be
+
+        # The original bug was triggered when a group was defined AFTER one named `RSpec`,
+        # due to it not using the fully qualified `::RSpec::Core::ExampleGroup` constant.
+        group = RSpec.describe("Yet Another group")
+        expect(group).to have_class_const("YetAnotherGroup")
       end
     end
 
-    context 'when RSpec.configuration.treat_symbols_as_metadata_keys_with_true_values is set to true' do
-      let(:group) { ExampleGroup.describe(:symbol) }
+    describe "ordering" do
+      context "when tagged with `:order => :defined`" do
+        it 'orders the subgroups and examples in defined order regardless of global order' do
+          RSpec.configuration.order = :random
 
-      before(:each) do
-        RSpec.configure { |c| c.treat_symbols_as_metadata_keys_with_true_values = true }
+          run_order = []
+          group = RSpec.describe "outer", :order => :defined do
+            context "subgroup 1" do
+              example { run_order << :g1_e1 }
+              example { run_order << :g1_e2 }
+            end
+
+            context "subgroup 2" do
+              example { run_order << :g2_e1 }
+              example { run_order << :g2_e2 }
+            end
+          end
+
+          group.run
+          expect(run_order).to eq([:g1_e1, :g1_e2, :g2_e1, :g2_e2])
+        end
       end
 
-      it 'does not treat the first argument as a metadata key even if it is a symbol' do
-        expect(group.metadata).not_to include(:symbol)
+      context "when tagged with an unrecognized ordering" do
+        let(:run_order) { [] }
+        let(:definition_line) { __LINE__ + 4 }
+        let(:group) do
+          order = self.run_order
+
+          RSpec.describe "group", :order => :unrecognized do
+            example { order << :ex_1 }
+            example { order << :ex_2 }
+          end
+        end
+
+        before do
+          RSpec.configuration.register_ordering(:global, &:reverse)
+          allow(self.group).to receive(:warn)
+        end
+
+        it 'falls back to the global ordering' do
+          self.group.run
+          expect(self.run_order).to eq([:ex_2, :ex_1])
+        end
+
+        it 'prints a warning so users are notified of their mistake' do
+          warning = nil
+          allow(self.group).to receive(:warn) { |msg| warning = msg }
+
+          self.group.run
+
+          expect(warning).to match(/unrecognized/)
+          expect(warning).to match(/#{File.basename __FILE__}:#{definition_line}/)
+        end
       end
 
-      it 'treats the first argument as part of the description when it is a symbol' do
-        expect(group.description).to eq("symbol")
+      context "when tagged with a custom ordering" do
+        def ascending_numbers
+          lambda { |g| Integer(g.description[/\d+/]) }
+        end
+
+        it 'uses the custom orderings' do
+          RSpec.configure do |c|
+            c.register_ordering :custom do |items|
+              items.sort_by(&ascending_numbers)
+            end
+          end
+
+          run_order = []
+          group = RSpec.describe "outer", :order => :custom do
+            example("e2") { run_order << :e2 }
+            example("e1") { run_order << :e1 }
+
+            context "subgroup 2" do
+              example("ex 3") { run_order << :g2_e3 }
+              example("ex 1") { run_order << :g2_e1 }
+              example("ex 2") { run_order << :g2_e2 }
+            end
+
+            context "subgroup 1" do
+              example("ex 2") { run_order << :g1_e2 }
+              example("ex 1") { run_order << :g1_e1 }
+              example("ex 3") { run_order << :g1_e3 }
+            end
+
+            context "subgroup 3" do
+              example("ex 2") { run_order << :g3_e2 }
+              example("ex 3") { run_order << :g3_e3 }
+              example("ex 1") { run_order << :g3_e1 }
+            end
+          end
+
+          group.run
+
+          expect(run_order).to eq([
+            :e1,    :e2,
+            :g1_e1, :g1_e2, :g1_e3,
+            :g2_e1, :g2_e2, :g2_e3,
+            :g3_e1, :g3_e2, :g3_e3
+          ])
+        end
       end
     end
 
     describe "top level group" do
       it "runs its children" do
         examples_run = []
-        group = ExampleGroup.describe("parent") do
+        group = RSpec.describe("parent") do
           describe("child") do
-            it "does something" do
-              examples_run << example
+            it "does something" do |ex|
+              examples_run << ex
             end
           end
         end
 
         group.run
-        expect(examples_run).to have(1).example
+        expect(examples_run.count).to eq(1)
       end
 
       context "with a failure in the top level group" do
         it "runs its children " do
           examples_run = []
-          group = ExampleGroup.describe("parent") do
-            it "fails" do
-              examples_run << example
+          group = RSpec.describe("parent") do
+            it "fails" do |ex|
+              examples_run << ex
               raise "fail"
             end
             describe("child") do
-              it "does something" do
-                examples_run << example
+              it "does something" do |ex|
+                examples_run << ex
               end
             end
           end
 
           group.run
-          expect(examples_run).to have(2).examples
+          expect(examples_run.count).to eq(2)
         end
       end
 
       describe "descendants" do
         it "returns self + all descendants" do
-          group = ExampleGroup.describe("parent") do
+          group = RSpec.describe("parent") do
             describe("child") do
               describe("grandchild 1") {}
               describe("grandchild 2") {}
@@ -110,42 +324,40 @@ module RSpec::Core
 
     describe "child" do
       it "is known by parent" do
-        parent = ExampleGroup.describe
+        parent = RSpec.describe
         child = parent.describe
         expect(parent.children).to eq([child])
       end
 
       it "is not registered in world" do
-        world = RSpec::Core::World.new
-        parent = ExampleGroup.describe
-        world.register(parent)
+        parent = RSpec.describe
         parent.describe
-        expect(world.example_groups).to eq([parent])
+
+        expect(RSpec.world.example_groups).to eq([parent])
       end
     end
 
     describe "filtering" do
       let(:world) { World.new }
+      before { allow(RSpec).to receive_messages(:world => self.world) }
 
       shared_examples "matching filters" do
         context "inclusion" do
           before do
             filter_manager = FilterManager.new
             filter_manager.include filter_metadata
-            world.stub(:filter_manager => filter_manager)
+            allow(self.world).to receive_messages(:filter_manager => filter_manager)
           end
 
           it "includes examples in groups matching filter" do
-            group = ExampleGroup.describe("does something", spec_metadata)
-            group.stub(:world) { world }
+            group = RSpec.describe("does something", spec_metadata)
             all_examples = [ group.example("first"), group.example("second") ]
 
             expect(group.filtered_examples).to eq(all_examples)
           end
 
           it "includes examples directly matching filter" do
-            group = ExampleGroup.describe("does something")
-            group.stub(:world) { world }
+            group = RSpec.describe("does something")
             filtered_examples = [
               group.example("first", spec_metadata),
               group.example("second", spec_metadata)
@@ -160,20 +372,18 @@ module RSpec::Core
           before do
             filter_manager = FilterManager.new
             filter_manager.exclude filter_metadata
-            world.stub(:filter_manager => filter_manager)
+            allow(self.world).to receive_messages(:filter_manager => filter_manager)
           end
 
           it "excludes examples in groups matching filter" do
-            group = ExampleGroup.describe("does something", spec_metadata)
-            group.stub(:world) { world }
+            group = RSpec.describe("does something", spec_metadata)
             [ group.example("first"), group.example("second") ]
 
             expect(group.filtered_examples).to be_empty
           end
 
           it "excludes examples directly matching filter" do
-            group = ExampleGroup.describe("does something")
-            group.stub(:world) { world }
+            group = RSpec.describe("does something")
             [
               group.example("first", spec_metadata),
               group.example("second", spec_metadata)
@@ -253,8 +463,7 @@ module RSpec::Core
 
       context "with no filters" do
         it "returns all" do
-          group = ExampleGroup.describe
-          group.stub(:world) { world }
+          group = RSpec.describe
           example = group.example("does something")
           expect(group.filtered_examples).to eq([example])
         end
@@ -264,9 +473,8 @@ module RSpec::Core
         it "returns none" do
           filter_manager = FilterManager.new
           filter_manager.include :awesome => false
-          world.stub(:filter_manager => filter_manager)
-          group = ExampleGroup.describe
-          group.stub(:world) { world }
+          allow(self.world).to receive_messages(:filter_manager => filter_manager)
+          group = RSpec.describe
           group.example("does something")
           expect(group.filtered_examples).to eq([])
         end
@@ -277,59 +485,82 @@ module RSpec::Core
 
       context "with a constant as the first parameter" do
         it "is that constant" do
-          expect(ExampleGroup.describe(Object) { }.described_class).to eq(Object)
+          expect(RSpec.describe(Object) { }.described_class).to eq(Object)
         end
       end
 
       context "with a string as the first parameter" do
         it "is nil" do
-          expect(ExampleGroup.describe("i'm a computer") { }.described_class).to be_nil
+          expect(RSpec.describe("i'm a computer") { }.described_class).to be_nil
         end
       end
 
       context "with a constant in an outer group" do
         context "and a string in an inner group" do
           it "is the top level constant" do
-            group = ExampleGroup.describe(String) do
-              describe :symbol do
+            group = RSpec.describe(String) do
+              describe "inner" do
                 example "described_class is String" do
                   expect(described_class).to eq(String)
                 end
               end
             end
 
-            expect(group.run).to be_true
+            expect(group.run).to be(true)
           end
         end
 
         context "and metadata redefinition after `described_class` call" do
           it "is the redefined level constant" do
-            group = ExampleGroup.describe(String) do
+            group = RSpec.describe(String) do
               described_class
-              metadata[:example_group][:described_class] = Object
-              describe :symbol do
+              metadata[:described_class] = Object
+              describe "inner" do
                 example "described_class is Object" do
                   expect(described_class).to eq(Object)
                 end
               end
             end
 
-            expect(group.run).to be_true
+            expect(group.run).to be(true)
           end
         end
       end
 
       context "in a nested group" do
         it "inherits the described class/module from the outer group" do
-          group = ExampleGroup.describe(String) do
-            describe Array do
+          group = RSpec.describe(String) do
+            describe "nested" do
               example "describes is String" do
                 expect(described_class).to eq(String)
               end
             end
           end
 
-          expect(group.run).to be_true, "expected examples in group to pass"
+          expect(group.run).to be(true), "expected examples in group to pass"
+        end
+
+        context "when a class is passed" do
+          def described_class_value
+            value = nil
+
+            RSpec.describe(String) do
+              yield if block_given?
+              describe Array do
+                example { value = described_class }
+              end
+            end.run
+
+            value
+          end
+
+          it "overrides the described class" do
+            expect(described_class_value).to eq(Array)
+          end
+
+          it "overrides the described class even when described_class is referenced in the outer group" do
+            expect(described_class_value { described_class }).to eq(Array)
+          end
         end
       end
 
@@ -337,7 +568,7 @@ module RSpec::Core
         def define_and_run_group(define_outer_example = false)
           outer_described_class = inner_described_class = nil
 
-          ExampleGroup.describe("some string") do
+          RSpec.describe("some string") do
             example { outer_described_class = described_class } if define_outer_example
 
             describe Array do
@@ -374,46 +605,133 @@ module RSpec::Core
 
     describe '#description' do
       it "grabs the description from the metadata" do
-        group = ExampleGroup.describe(Object, "my desc") { }
-        expect(group.description).to eq(group.metadata[:example_group][:description])
+        group = RSpec.describe(Object, "my desc") { }
+        expect(group.description).to eq(group.metadata[:description])
       end
     end
 
     describe '#metadata' do
       it "adds the third parameter to the metadata" do
-        expect(ExampleGroup.describe(Object, nil, 'foo' => 'bar') { }.metadata).to include({ "foo" => 'bar' })
+        expect(RSpec.describe(Object, nil, 'foo' => 'bar') { }.metadata).to include({ "foo" => 'bar' })
       end
 
       it "adds the the file_path to metadata" do
-        expect(ExampleGroup.describe(Object) { }.metadata[:example_group][:file_path]).to eq(relative_path(__FILE__))
+        expect(RSpec.describe(Object) { }.metadata[:file_path]).to eq(relative_path(__FILE__))
       end
 
       it "has a reader for file_path" do
-        expect(ExampleGroup.describe(Object) { }.file_path).to eq(relative_path(__FILE__))
+        expect(RSpec.describe(Object) { }.file_path).to eq(relative_path(__FILE__))
       end
 
       it "adds the line_number to metadata" do
-        expect(ExampleGroup.describe(Object) { }.metadata[:example_group][:line_number]).to eq(__LINE__)
+        expect(RSpec.describe(Object) { }.metadata[:line_number]).to eq(__LINE__)
       end
     end
 
-    [:focus, :focused].each do |example_alias|
-      describe "##{example_alias}" do
-        let(:focused_example) { ExampleGroup.describe.send example_alias, "a focused example" }
-
-        it 'defines an example that can be filtered with :focused => true' do
-          expect(focused_example.metadata[:focused]).to be_true
-        end
+    [:focus, :fexample, :fit, :fspecify].each do |example_alias|
+      describe ".#{example_alias}" do
+        let(:focused_example) { RSpec.describe.send example_alias, "a focused example" }
 
         it 'defines an example that can be filtered with :focus => true' do
-          expect(focused_example.metadata[:focus]).to be_true
+          expect(focused_example.metadata[:focus]).to be(true)
         end
       end
     end
 
     describe "#before, after, and around hooks" do
+      describe "scope aliasing" do
+        it "aliases the `:context` hook scope to `:all` for before-hooks" do
+          group = RSpec.describe
+          order = []
+          group.before(:context) { order << :before_context }
+          group.example("example") { order << :example }
+          group.example("example") { order << :example }
+
+          group.run
+          expect(order).to eq([:before_context, :example, :example])
+        end
+
+        it "aliases the `:example` hook scope to `:each` for before-hooks" do
+          group = RSpec.describe
+          order = []
+          group.before(:example) { order << :before_example }
+          group.example("example") { order << :example }
+          group.example("example") { order << :example }
+
+          group.run
+          expect(order).to eq([:before_example, :example, :before_example, :example])
+        end
+
+        it "aliases the `:context` hook scope to `:all` for after-hooks" do
+          group = RSpec.describe
+          order = []
+          group.example("example") { order << :example }
+          group.example("example") { order << :example }
+          group.after(:context) { order << :after_context }
+
+          group.run
+          expect(order).to eq([:example, :example, :after_context])
+        end
+
+        it "aliases the `:example` hook scope to `:each` for after-hooks" do
+          group = RSpec.describe
+          order = []
+          group.example("example") { order << :example }
+          group.example("example") { order << :example }
+          group.after(:example) { order << :after_example }
+
+          group.run
+          expect(order).to eq([:example, :after_example, :example, :after_example])
+        end
+
+        describe "#currently_executing_a_context_hook?" do
+          it "sets currently_executing_a_context_hook? to false initially" do
+            group = RSpec.describe
+            expect(group.currently_executing_a_context_hook?).to be false
+          end
+
+          it "sets currently_executing_a_context_hook? during before(:context) execution" do
+            group = RSpec.describe
+            hook_result = nil
+            group.before(:context) { hook_result = group.currently_executing_a_context_hook? }
+            group.example("") {}
+            group.run
+            expect(hook_result).to be true
+          end
+
+          it "does not set currently_executing_a_context_hook? outside of before(:context) execution" do
+            group = RSpec.describe
+            hook_result = nil
+
+            group.before(:context) { hook_result = group.currently_executing_a_context_hook? }
+            group.before(:each) { hook_result = group.currently_executing_a_context_hook? }
+            group.example("") {}
+            group.run
+            expect(hook_result).to be false
+          end
+
+          it "sets currently_executing_a_context_hook? during after(:context) execution" do
+            group = RSpec.describe
+            hook_result = nil
+
+            group.after(:context) { hook_result = group.currently_executing_a_context_hook? }
+            group.example("") {}
+            group.run
+            expect(hook_result).to be true
+          end
+
+          it "unsets currently_executing_a_context_hook? after an after(:context) hook is done" do
+            group = RSpec.describe
+            group.after(:context) { }
+            group.example("") {}
+            group.run
+            expect(group.currently_executing_a_context_hook?).to be false
+          end
+        end
+      end
+
       it "runs the before alls in order" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         order = []
         group.before(:all) { order << 1 }
         group.before(:all) { order << 2 }
@@ -425,17 +743,17 @@ module RSpec::Core
         expect(order).to eq([1,2,3])
       end
 
-      it "does not set RSpec.wants_to_quit in case of an error in before all (without fail_fast?)" do
-        group = ExampleGroup.describe
+      it "does not set RSpec.world.wants_to_quit in case of an error in before all (without fail_fast?)" do
+        group = RSpec.describe
         group.before(:all) { raise "error in before all" }
         group.example("example") {}
 
         group.run
-        expect(RSpec.wants_to_quit).to be_false
+        expect(RSpec.world.wants_to_quit).to be(false)
       end
 
       it "runs the before eachs in order" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         order = []
         group.before(:each) { order << 1 }
         group.before(:each) { order << 2 }
@@ -448,7 +766,7 @@ module RSpec::Core
       end
 
       it "runs the after eachs in reverse order" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         order = []
         group.after(:each) { order << 1 }
         group.after(:each) { order << 2 }
@@ -461,7 +779,7 @@ module RSpec::Core
       end
 
       it "runs the after alls in reverse order" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         order = []
         group.after(:all) { order << 1 }
         group.after(:all) { order << 2 }
@@ -480,7 +798,7 @@ module RSpec::Core
           c.filter_run :focus => true
         end
 
-        unfiltered_group = ExampleGroup.describe "unfiltered" do
+        unfiltered_group = RSpec.describe "unfiltered" do
           before(:all) { hooks_run << :unfiltered_before_all }
           after(:all)  { hooks_run << :unfiltered_after_all  }
 
@@ -489,7 +807,7 @@ module RSpec::Core
           end
         end
 
-        filtered_group = ExampleGroup.describe "filtered", :focus => true do
+        filtered_group = RSpec.describe "filtered", :focus => true do
           before(:all) { hooks_run << :filtered_before_all }
           after(:all)  { hooks_run << :filtered_after_all  }
 
@@ -512,7 +830,7 @@ module RSpec::Core
           c.after(:all) { order << :after_all_defined_in_config }
         end
 
-        group = ExampleGroup.describe
+        group = RSpec.describe
         group.before(:all)  { order << :top_level_before_all  }
         group.before(:each) { order << :before_each }
         group.after(:each)  { order << :after_each  }
@@ -549,7 +867,7 @@ module RSpec::Core
       end
 
       context "after(:all)" do
-        let(:outer) { ExampleGroup.describe }
+        let(:outer) { RSpec.describe }
         let(:inner) { outer.describe }
 
         it "has access to state defined before(:all)" do
@@ -574,38 +892,37 @@ module RSpec::Core
 
           outer.run
 
-          expect(inner.before_all_ivars[:@inner]).to be_nil
-          expect(inner.before_all_ivars[:@outer]).to be_nil
-          expect(outer.before_all_ivars[:@inner]).to be_nil
-          expect(outer.before_all_ivars[:@outer]).to be_nil
+          expect(inner.before_context_ivars[:@inner]).to be_nil
+          expect(inner.before_context_ivars[:@outer]).to be_nil
+          expect(outer.before_context_ivars[:@inner]).to be_nil
+          expect(outer.before_context_ivars[:@outer]).to be_nil
         end
       end
 
       it "treats an error in before(:each) as a failure" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         group.before(:each) { raise "error in before each" }
         example = group.example("equality") { expect(1).to eq(2) }
         expect(group.run).to be(false)
 
-        expect(example.metadata[:execution_result][:exception].message).to eq("error in before each")
+        expect(example.execution_result.exception.message).to eq("error in before each")
       end
 
       it "treats an error in before(:all) as a failure" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         group.before(:all) { raise "error in before all" }
         example = group.example("equality") { expect(1).to eq(2) }
-        expect(group.run).to be_false
+        expect(group.run).to be(false)
 
         expect(example.metadata).not_to be_nil
-        expect(example.metadata[:execution_result]).not_to be_nil
-        expect(example.metadata[:execution_result][:exception]).not_to be_nil
-        expect(example.metadata[:execution_result][:exception].message).to eq("error in before all")
+        expect(example.execution_result.exception).not_to be_nil
+        expect(example.execution_result.exception.message).to eq("error in before all")
       end
 
       it "exposes instance variables set in before(:all) from after(:all) even if a before(:all) error occurs" do
         ivar_value_in_after_hook = nil
 
-        group = ExampleGroup.describe do
+        group = RSpec.describe do
           before(:all) do
             @an_ivar = :set_in_before_all
             raise "fail"
@@ -622,7 +939,7 @@ module RSpec::Core
 
       it "treats an error in before(:all) as a failure for a spec in a nested group" do
         example = nil
-        group = ExampleGroup.describe do
+        group = RSpec.describe do
           before(:all) { raise "error in before all" }
 
           describe "nested" do
@@ -632,116 +949,278 @@ module RSpec::Core
         group.run
 
         expect(example.metadata).not_to be_nil
-        expect(example.metadata[:execution_result]).not_to be_nil
-        expect(example.metadata[:execution_result][:exception]).not_to be_nil
-        expect(example.metadata[:execution_result][:exception].message).to eq("error in before all")
+        expect(example.execution_result.exception).not_to be_nil
+        expect(example.execution_result.exception.message).to eq("error in before all")
       end
 
       context "when an error occurs in an after(:all) hook" do
+        hooks_run = []
+
         before(:each) do
-          RSpec.configuration.reporter.stub(:message)
+          hooks_run = []
+          allow(RSpec.configuration.reporter).to receive(:message)
         end
 
         let(:group) do
-          ExampleGroup.describe do
-            after(:all) { raise "error in after all" }
+          RSpec.describe do
+            after(:all) { hooks_run << :one; raise "An error in an after(:all) hook" }
+            after(:all) { hooks_run << :two; raise "A different hook raising an error" }
             it("equality") { expect(1).to eq(1) }
           end
         end
 
         it "allows the example to pass" do
-          group.run
-          example = group.examples.first
-          expect(example.metadata).not_to be_nil
-          expect(example.metadata[:execution_result]).not_to be_nil
-          expect(example.metadata[:execution_result][:status]).to eq("passed")
+          self.group.run
+          example = self.group.examples.first
+          expect(example.execution_result.status).to eq(:passed)
         end
 
-        it "rescues the error and prints it out" do
-          RSpec.configuration.reporter.should_receive(:message).with(/error in after all/)
-          group.run
+        it "rescues any error(s) and prints them out" do
+          expect(RSpec.configuration.reporter).to receive(:message).with(/An error in an after\(:all\) hook/)
+          expect(RSpec.configuration.reporter).to receive(:message).with(/A different hook raising an error/)
+          self.group.run
         end
-      end
 
-      it "has no 'running example' within before(:all)" do
-        group = ExampleGroup.describe
-        running_example = :none
-        group.before(:all) { running_example = example }
-        group.example("no-op") { }
-        group.run
-        expect(running_example).to be(nil)
-      end
+        it "still runs both after blocks" do
+          self.group.run
+          expect(hooks_run).to eq [:two,:one]
+        end
 
-      it "has access to example options within before(:each)" do
-        group = ExampleGroup.describe
-        option = nil
-        group.before(:each) { option = example.options[:data] }
-        group.example("no-op", :data => :sample) { }
-        group.run
-        expect(option).to eq(:sample)
-      end
-
-      it "has access to example options within after(:each)" do
-        group = ExampleGroup.describe
-        option = nil
-        group.after(:each) { option = example.options[:data] }
-        group.example("no-op", :data => :sample) { }
-        group.run
-        expect(option).to eq(:sample)
-      end
-
-      it "has no 'running example' within after(:all)" do
-        group = ExampleGroup.describe
-        running_example = :none
-        group.after(:all) { running_example = example }
-        group.example("no-op") { }
-        group.run
-        expect(running_example).to be(nil)
+        it "sets `world.non_example_failure` so the exit status will be non-zero" do
+          expect {
+            self.group.run
+          }.to change { RSpec.world.non_example_failure }.from(a_falsey_value).to(true)
+        end
       end
     end
 
-    %w[pending xit xspecify xexample].each do |method_name|
-      describe "::#{method_name}" do
-        before do
-          @group = ExampleGroup.describe
-          @group.send(method_name, "is pending") { }
+    describe ".pending" do
+      let(:group) { RSpec.describe { pending { fail } } }
+
+      it "generates a pending example" do
+        self.group.run
+        expect(self.group.examples.first).to be_pending
+      end
+
+      it "sets the pending message" do
+        self.group.run
+        expect(self.group.examples.first.execution_result.pending_message).to eq(RSpec::Core::Pending::NO_REASON_GIVEN)
+      end
+
+      it 'sets the backtrace to the example definition so it can be located by the user' do
+        file = RSpec::Core::Metadata.relative_path(__FILE__)
+        expected = [file, __LINE__ + 2].map(&:to_s)
+        group = RSpec.describe do
+          pending { }
+        end
+        group.run
+
+        actual = group.examples.first.exception.backtrace.first.split(':')[0..1]
+        expect(actual).to eq(expected)
+      end
+
+      it 'generates a pending example when no block is provided' do
+        group = RSpec.describe "group"
+        example = group.pending "just because"
+        group.run
+        expect(example).to be_pending
+      end
+    end
+
+    describe "pending with metadata" do
+      let(:group) { RSpec.describe {
+        example("unimplemented", :pending => true) { fail }
+      } }
+
+      it "generates a pending example" do
+        self.group.run
+        expect(self.group.examples.first).to be_pending
+      end
+
+      it "sets the pending message" do
+        self.group.run
+        expect(self.group.examples.first.execution_result.pending_message).to eq(RSpec::Core::Pending::NO_REASON_GIVEN)
+      end
+    end
+
+    describe "pending with message in metadata" do
+      let(:group) { RSpec.describe {
+        example("unimplemented", :pending => 'not done') { fail }
+      } }
+
+      it "generates a pending example" do
+        self.group.run
+        expect(self.group.examples.first).to be_pending
+      end
+
+      it "sets the pending message" do
+        self.group.run
+        expect(self.group.examples.first.execution_result.pending_message).to eq("not done")
+      end
+    end
+
+    describe ".skip" do
+      let(:group) { RSpec.describe { skip("skip this") { } } }
+
+      it "generates a skipped example" do
+        self.group.run
+        expect(self.group.examples.first).to be_skipped
+      end
+
+      it "sets the pending message" do
+        self.group.run
+        expect(self.group.examples.first.execution_result.pending_message).to eq(RSpec::Core::Pending::NO_REASON_GIVEN)
+      end
+    end
+
+    describe "skip with metadata" do
+      let(:group) { RSpec.describe {
+        example("skip this", :skip => true) { }
+      } }
+
+      it "generates a skipped example" do
+        self.group.run
+        expect(self.group.examples.first).to be_skipped
+      end
+
+      it "sets the pending message" do
+        self.group.run
+        expect(self.group.examples.first.execution_result.pending_message).to eq(RSpec::Core::Pending::NO_REASON_GIVEN)
+      end
+    end
+
+    describe "skip with message in metadata" do
+      let(:group) { RSpec.describe {
+        example("skip this", :skip => 'not done') { }
+      } }
+
+      it "generates a skipped example" do
+        self.group.run
+        expect(self.group.examples.first).to be_skipped
+      end
+
+      it "sets the pending message" do
+        self.group.run
+        expect(self.group.examples.first.execution_result.pending_message).to eq('not done')
+      end
+    end
+
+    %w[xit xspecify xexample].each do |method_name|
+      describe ".#{method_name}" do
+        let(:group) { RSpec.describe.tap {|x|
+          x.send(method_name, "is pending") { }
+        }}
+
+        it "generates a skipped example" do
+          self.group.run
+          expect(self.group.examples.first).to be_skipped
         end
 
-        it "generates a pending example" do
-          @group.run
-          expect(@group.examples.first).to be_pending
+        it "sets the pending message" do
+          self.group.run
+          expect(self.group.examples.first.execution_result.pending_message).to eq("Temporarily skipped with #{method_name}")
+        end
+      end
+    end
+
+    %w[ xdescribe xcontext ].each do |method_name|
+      describe ".#{method_name}" do
+        def extract_execution_results(group)
+          group.examples.map do |ex|
+            ex.metadata.fetch(:execution_result)
+          end
         end
 
-        it "sets the pending message", :if => method_name == 'pending' do
-          @group.run
-          expect(@group.examples.first.metadata[:execution_result][:pending_message]).to eq(RSpec::Core::Pending::NO_REASON_GIVEN)
+        it 'generates a pending example group' do
+          group = ExampleGroup.send(method_name, "group") do
+            it("passes") { }
+            it("fails")  { expect(2).to eq(3) }
+          end
+          group.run
+
+          expect(extract_execution_results(group)).to match([
+            have_attributes(
+              :status => :pending,
+              :pending_message => "Temporarily skipped with #{method_name}"
+            )
+          ] * 2)
+        end
+      end
+    end
+
+    %w[ fdescribe fcontext ].each do |method_name|
+      describe ".#{method_name}" do
+        def executed_examples_of(group)
+          examples = group.examples.select { |ex| ex.execution_result.started_at }
+          group.children.inject(examples) { |exs, child| exs + executed_examples_of(child) }
         end
 
-        it "sets the pending message", :unless => method_name == 'pending' do
-          @group.run
-          expect(@group.examples.first.metadata[:execution_result][:pending_message]).to eq("Temporarily disabled with #{method_name}")
+        it "generates an example group that can be filtered with :focus" do
+          RSpec.configuration.filter_run :focus
+
+          parent_group = RSpec.describe do
+            describe "not focused" do
+              example("not focused example") { }
+            end
+
+            send(method_name, "focused") do
+              example("focused example") { }
+            end
+          end
+
+          parent_group.run
+
+          executed_descriptions = executed_examples_of(parent_group).map(&:description)
+          expect(executed_descriptions).to eq(["focused example"])
         end
+      end
+    end
+
+    describe "setting pending metadata in parent" do
+      def extract_execution_results(group)
+        group.examples.map do |ex|
+          ex.metadata.fetch(:execution_result)
+        end
+      end
+
+      it 'marks every example as pending' do
+        group = RSpec.describe("group", :pending => true) do
+          it("passes") { }
+          it("fails", :pending => 'unimplemented')  { fail }
+        end
+        group.run
+
+        expect(extract_execution_results(group)).to match([
+          have_attributes(
+            :status => :failed,
+            :pending_message => "No reason given"
+          ),
+          have_attributes(
+            :status => :pending,
+            :pending_message => "unimplemented"
+          )
+        ])
       end
     end
 
     describe "adding examples" do
 
       it "allows adding an example using 'it'" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         group.it("should do something") { }
         expect(group.examples.size).to eq(1)
       end
 
       it "exposes all examples at examples" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         group.it("should do something 1") { }
         group.it("should do something 2") { }
         group.it("should do something 3") { }
-        expect(group).to have(3).examples
+        expect(group.examples.count).to eq(3)
       end
 
       it "maintains the example order" do
-        group = ExampleGroup.describe
+        group = RSpec.describe
         group.it("should 1") { }
         group.it("should 2") { }
         group.it("should 3") { }
@@ -755,57 +1234,56 @@ module RSpec::Core
     describe Object, "describing nested example_groups", :little_less_nested => 'yep' do
 
       describe "A sample nested group", :nested_describe => "yep" do
-        it "sets the described class to the described class of the outer most group" do
-          expect(example.example_group.described_class).to eq(ExampleGroup)
+        it "sets the described class to the nearest described class" do |ex|
+          expect(ex.example_group.described_class).to eq(Object)
         end
 
-        it "sets the description to 'A sample nested describe'" do
-          expect(example.example_group.description).to eq('A sample nested group')
+        it "sets the description to 'A sample nested describe'" do |ex|
+          expect(ex.example_group.description).to eq('A sample nested group')
         end
 
-        it "has top level metadata from the example_group and its parent groups" do
-          expect(example.example_group.metadata).to include(:little_less_nested => 'yep', :nested_describe => 'yep')
+        it "has top level metadata from the example_group and its parent groups" do |ex|
+          expect(ex.example_group.metadata).to include(:little_less_nested => 'yep', :nested_describe => 'yep')
         end
 
-        it "exposes the parent metadata to the contained examples" do
-          expect(example.metadata).to include(:little_less_nested => 'yep', :nested_describe => 'yep')
+        it "exposes the parent metadata to the contained examples" do |ex|
+          expect(ex.metadata).to include(:little_less_nested => 'yep', :nested_describe => 'yep')
         end
       end
 
     end
 
     describe "#run_examples" do
-
-      let(:reporter) { double("reporter").as_null_object }
+      let(:reporter) { RSpec::Core::NullReporter }
 
       it "returns true if all examples pass" do
-        group = ExampleGroup.describe('group') do
+        group = RSpec.describe('group') do
           example('ex 1') { expect(1).to eq(1) }
           example('ex 2') { expect(1).to eq(1) }
         end
-        group.stub(:filtered_examples) { group.examples.extend(Extensions::Ordered::Examples) }
-        expect(group.run(reporter)).to be_true
+        allow(group).to receive(:filtered_examples) { group.examples }
+        expect(group.run(reporter)).to be(true)
       end
 
       it "returns false if any of the examples fail" do
-        group = ExampleGroup.describe('group') do
+        group = RSpec.describe('group') do
           example('ex 1') { expect(1).to eq(1) }
           example('ex 2') { expect(1).to eq(2) }
         end
-        group.stub(:filtered_examples) { group.examples.extend(Extensions::Ordered::Examples) }
-        expect(group.run(reporter)).to be_false
+        allow(group).to receive(:filtered_examples) { group.examples }
+        expect(group.run(reporter)).to be(false)
       end
 
       it "runs all examples, regardless of any of them failing" do
-        group = ExampleGroup.describe('group') do
+        group = RSpec.describe('group') do
           example('ex 1') { expect(1).to eq(2) }
           example('ex 2') { expect(1).to eq(1) }
         end
-        group.stub(:filtered_examples) { group.examples.extend(Extensions::Ordered::Examples) }
+        allow(group).to receive(:filtered_examples) { group.examples }
         group.filtered_examples.each do |example|
-          example.should_receive(:run)
+          expect(example).to receive(:run)
         end
-        expect(group.run(reporter)).to be_false
+        expect(group.run(reporter)).to be(false)
       end
     end
 
@@ -826,12 +1304,8 @@ module RSpec::Core
         expect(@before_all_top_level).to eq('before_all_top_level')
       end
 
-      it "can access the before all ivars in the before_all_ivars hash", :ruby => 1.8 do
-        expect(example.example_group.before_all_ivars).to include('@before_all_top_level' => 'before_all_top_level')
-      end
-
-      it "can access the before all ivars in the before_all_ivars hash", :ruby => 1.9 do
-        expect(example.example_group.before_all_ivars).to include(:@before_all_top_level => 'before_all_top_level')
+      it "can access the before all ivars in the before_all_ivars hash" do |ex|
+        expect(ex.example_group.before_context_ivars).to include(:@before_all_top_level => 'before_all_top_level')
       end
 
       describe "but now I am nested" do
@@ -859,12 +1333,12 @@ module RSpec::Core
     describe "ivars are not shared across examples" do
       it "(first example)" do
         @a = 1
-        expect(defined?(@b)).to be_false
+        expect(defined?(@b)).to be(nil)
       end
 
       it "(second example)" do
         @b = 2
-        expect(defined?(@a)).to be_false
+        expect(defined?(@a)).to be(nil)
       end
     end
 
@@ -872,7 +1346,7 @@ module RSpec::Core
     describe "#top_level_description" do
       it "returns the description from the outermost example group" do
         group = nil
-        ExampleGroup.describe("top") do
+        RSpec.describe("top") do
           context "middle" do
             group = describe "bottom" do
             end
@@ -884,66 +1358,105 @@ module RSpec::Core
     end
 
     describe "#run" do
-      let(:reporter) { double("reporter").as_null_object }
+      context "with `fail_fast` set to `nil`" do
+        before { RSpec.configuration.fail_fast = nil }
+        let(:group) { RSpec.describe }
+        let(:reporter) { Reporter.new(RSpec.configuration) }
 
-      context "with fail_fast? => true" do
-        let(:group) do
-          group = RSpec::Core::ExampleGroup.describe
-          group.stub(:fail_fast?) { true }
-          group
+        it "does not run abort due to failures" do
+          examples_run = []
+          group().example('example 1') { examples_run << self; fail }
+          group().example('example 2') { examples_run << self; fail }
+          group().example('example 3') { examples_run << self; fail }
+
+          group().run(reporter)
+
+          expect(examples_run.length).to eq(3)
         end
+      end
+
+      context "with fail_fast enabled" do
+        before { RSpec.configuration.fail_fast = true }
+        let(:group) { RSpec.describe }
+        let(:reporter) { Reporter.new(RSpec.configuration) }
 
         it "does not run examples after the failed example" do
           examples_run = []
-          group.example('example 1') { examples_run << self }
-          group.example('example 2') { examples_run << self; fail; }
-          group.example('example 3') { examples_run << self }
+          group().example('example 1') { examples_run << self }
+          group().example('example 2') { examples_run << self; fail; }
+          group().example('example 3') { examples_run << self }
 
-          group.run
+          group().run(reporter)
 
           expect(examples_run.length).to eq(2)
         end
 
-        it "sets RSpec.wants_to_quit flag if encountering an exception in before(:all)" do
-          group.before(:all) { raise "error in before all" }
-          example = group.example("equality") { expect(1).to eq(2) }
-          expect(group.run).to be_false
-          expect(RSpec.wants_to_quit).to be_true
+        it "sets RSpec.world.wants_to_quit flag if encountering an exception in before(:all)" do
+          group().before(:all) { raise "error in before all" }
+          group().example("equality") { expect(1).to eq(2) }
+          expect(group().run(reporter)).to be(false)
+          expect(RSpec.world.wants_to_quit).to be(true)
         end
       end
 
-      context "with RSpec.wants_to_quit=true" do
-        let(:group) { RSpec::Core::ExampleGroup.describe }
+      context "with fail_fast set to 3" do
+        before { RSpec.configuration.fail_fast = 3 }
+        let(:group) { RSpec.describe }
+        let(:reporter) { Reporter.new(RSpec.configuration) }
+
+        it "does not run examples after 3 failed examples" do
+          examples_run = []
+          group().example('example 1') { examples_run << self }
+          group().example('example 2') { examples_run << self; fail; }
+          group().example('example 3') { examples_run << self; fail; }
+          group().example('example 4') { examples_run << self; fail; }
+          group().example('example 5') { examples_run << self }
+
+          group().run(reporter)
+
+          expect(examples_run.length).to eq(4)
+        end
+
+        it "does not set RSpec.world.wants_to_quit flag if encountering an exception in before(:all) causing less than 3 failures" do
+          group().before(:all) { raise "error in before all" }
+          group().example("equality") { expect(1).to eq(2) }
+          group().example("equality") { expect(1).to eq(2) }
+
+          expect(group().run(reporter)).to be false
+
+          expect(RSpec.world.wants_to_quit).to be(false)
+        end
+
+        it "sets RSpec.world.wants_to_quit flag if encountering an exception in before(:all) causing at least 3 failures" do
+          group().before(:all) { raise "error in before all" }
+          group().example("equality") { expect(1).to eq(1) }
+          group().example("equality") { expect(1).to eq(1) }
+          group().example("equality") { expect(1).to eq(1) }
+
+          expect(group().run(reporter)).to be false
+
+          expect(RSpec.world.wants_to_quit).to be true
+        end
+      end
+
+      let(:reporter) { double("reporter").as_null_object }
+
+      context "with RSpec.world.wants_to_quit=true" do
+        let(:group) { RSpec.describe }
 
         before do
-          RSpec.stub(:wants_to_quit) { true }
-          RSpec.stub(:clear_remaining_example_groups)
+          RSpec.world.wants_to_quit = true
         end
 
         it "returns without starting the group" do
-          reporter.should_not_receive(:example_group_started)
-          group.run(reporter)
-        end
-
-        context "at top level" do
-          it "purges remaining groups" do
-            RSpec.should_receive(:clear_remaining_example_groups)
-            group.run(reporter)
-          end
-        end
-
-        context "in a nested group" do
-          it "does not purge remaining groups" do
-            nested_group = group.describe
-            RSpec.should_not_receive(:clear_remaining_example_groups)
-            nested_group.run(reporter)
-          end
+          expect(reporter).not_to receive(:example_group_started)
+          group().run(reporter)
         end
       end
 
       context "with all examples passing" do
         it "returns true" do
-          group = RSpec::Core::ExampleGroup.describe("something") do
+          group = RSpec.describe("something") do
             it "does something" do
               # pass
             end
@@ -954,13 +1467,13 @@ module RSpec::Core
             end
           end
 
-          expect(group.run(reporter)).to be_true
+          expect(group.run(reporter)).to be(true)
         end
       end
 
       context "with top level example failing" do
         it "returns false" do
-          group = RSpec::Core::ExampleGroup.describe("something") do
+          group = RSpec.describe("something") do
             it "does something (wrong - fail)" do
               raise "fail"
             end
@@ -971,13 +1484,13 @@ module RSpec::Core
             end
           end
 
-          expect(group.run(reporter)).to be_false
+          expect(group.run(reporter)).to be(false)
         end
       end
 
       context "with nested example failing" do
         it "returns true" do
-          group = RSpec::Core::ExampleGroup.describe("something") do
+          group = RSpec.describe("something") do
             it "does something" do
               # pass
             end
@@ -988,43 +1501,187 @@ module RSpec::Core
             end
           end
 
-          expect(group.run(reporter)).to be_false
+          expect(group.run(reporter)).to be(false)
         end
+      end
+    end
+
+    describe "#update_inherited_metadata" do
+      it "updates the group metadata with the provided hash" do
+        group = RSpec.describe
+
+        expect(group.metadata).not_to include(:foo => 1, :bar => 2)
+        group.update_inherited_metadata(:foo => 1, :bar => 2)
+        expect(group.metadata).to include(:foo => 1, :bar => 2)
+      end
+
+      it "does not overwrite existing metadata originating from that level" do
+        group = RSpec.describe("group", :foo => 1)
+
+        expect {
+          group.update_inherited_metadata(:foo => 2)
+        }.not_to change { group.metadata[:foo] }.from(1)
+      end
+
+      it "overwrites metadata originating from a parent" do
+        group = nil
+        RSpec.describe("group", :foo => 1) do
+          group = context do
+          end
+        end
+
+        expect {
+          group.update_inherited_metadata(:foo => 2)
+        }.to change { group.metadata[:foo] }.from(1).to(2)
+      end
+
+      it "does not replace the existing metadata object with a new one or change its default proc" do
+        group = RSpec.describe
+
+        expect {
+          group.update_inherited_metadata(:foo => 1)
+        }.to avoid_changing { group.metadata.__id__ }.and avoid_changing { group.metadata.default_proc }
+      end
+
+      it "propogates metadata updates to previously declared child examples" do
+        group = RSpec.describe
+        example = group.example
+
+        expect {
+          group.update_inherited_metadata(:foo => 1)
+        }.to change { example.metadata[:foo] }.from(nil).to(1)
+      end
+
+      it "propogates metadata updates to previously declared child group" do
+        group = RSpec.describe
+        child_group = group.describe
+
+        expect {
+          group.update_inherited_metadata(:foo => 1)
+        }.to change { child_group.metadata[:foo] }.from(nil).to(1)
+      end
+
+      it "applies new metadata-based config items based on the update" do
+        extension = Module.new do
+          def extension_method; 17; end
+        end
+
+        sequence = []
+        extension_checks = []
+        RSpec.configure do |c|
+          c.before(:example, :foo => true) { sequence << :global_before_hook }
+          c.after(:example, :foo => true) { sequence << :global_after_hook }
+          c.extend extension, :foo => true
+        end
+
+        describe_successfully do
+          example { sequence << :example_1 }
+
+          extension_checks << begin
+            self.extension_method
+          rescue NoMethodError
+            :method_not_defined
+          end
+
+          context "nested group before update" do
+            example { sequence << :nested_example }
+          end
+
+          update_inherited_metadata(:foo => true)
+
+          extension_checks << begin
+            self.extension_method
+          rescue NoMethodError
+            :method_not_defined
+          end
+
+          example { sequence << :example_2 }
+        end
+
+        expect(sequence).to eq [
+          :global_before_hook, :example_1, :global_after_hook,
+          :global_before_hook, :example_2, :global_after_hook,
+          :global_before_hook, :nested_example, :global_after_hook,
+        ]
+
+        expect(extension_checks).to eq [:method_not_defined, 17]
+      end
+
+      it "does not cause duplicate hooks to be added when re-configuring the group" do
+        sequence = []
+        RSpec.configure do |c|
+          c.before(:example, :foo => true) { sequence << :global_before_hook }
+          c.after(:example, :foo => true) { sequence << :global_after_hook }
+        end
+
+        describe_successfully("Group", :foo => true) do
+         example { sequence << :example_1 }
+         update_inherited_metadata(:bar => true)
+         example { sequence << :example_2 }
+        end
+
+        expect(sequence).to eq [
+          :global_before_hook, :example_1, :global_after_hook,
+          :global_before_hook, :example_2, :global_after_hook,
+        ]
       end
     end
 
     %w[include_examples include_context].each do |name|
       describe "##{name}" do
+        let(:group) { RSpec.describe }
         before do
-          shared_examples "named this" do
+          self.group.shared_examples "named this" do
             example("does something") {}
           end
         end
 
         it "includes the named examples" do
-          group = ExampleGroup.describe
-          group.send(name, "named this")
-          expect(group.examples.first.description).to eq("does something")
+          self.group.send(name, "named this")
+          expect(self.group.examples.first.description).to eq("does something")
         end
 
         it "raises a helpful error message when shared content is not found" do
-          group = ExampleGroup.describe
           expect do
-            group.send(name, "shared stuff")
+            self.group.send(name, "shared stuff")
           end.to raise_error(ArgumentError, /Could not find .* "shared stuff"/)
+        end
+
+        it "raises a helpful error message when shared content is accessed recursively" do
+          self.group.shared_examples "named otherwise" do
+            example("does something") {}
+            self.send(name, "named otherwise")
+          end
+          expect do
+            self.group.send(name, "named otherwise")
+          end.to raise_error(ArgumentError, /can't include shared examples recursively/)
+        end
+
+        it "leaves RSpec's thread metadata unchanged" do
+          expect {
+            self.group.send(name, "named this")
+          }.to avoid_changing(RSpec::Support, :thread_local_data)
+        end
+
+        it "leaves RSpec's thread metadata unchanged, even when an error occurs during evaluation" do
+          expect {
+            self.group.send(name, "named this") do
+              raise "boom"
+            end
+          }.to raise_error("boom").and avoid_changing(RSpec::Support, :thread_local_data)
         end
 
         it "passes parameters to the shared content" do
           passed_params = {}
+          group = RSpec.describe
 
-          shared_examples "named this with params" do |param1, param2|
+          group.shared_examples "named this with params" do |param1, param2|
             it("has access to the given parameters") do
               passed_params[:param1] = param1
               passed_params[:param2] = param2
             end
           end
 
-          group = ExampleGroup.describe
           group.send(name, "named this with params", :value1, :value2)
           group.run
 
@@ -1032,127 +1689,129 @@ module RSpec::Core
         end
 
         it "adds shared instance methods to the group" do
-          shared_examples "named this with params" do |param1|
+          group = RSpec.describe('fake group')
+          group.shared_examples "named this with params" do |param1|
             def foo; end
           end
-          group = ExampleGroup.describe('fake group')
           group.send(name, "named this with params", :a)
           expect(group.public_instance_methods.map{|m| m.to_s}).to include("foo")
         end
 
         it "evals the shared example group only once" do
           eval_count = 0
-          shared_examples("named this with params") { |p| eval_count += 1 }
-          group = ExampleGroup.describe('fake group')
+          group = RSpec.describe('fake group')
+          group.shared_examples("named this with params") { |p| eval_count += 1 }
           group.send(name, "named this with params", :a)
           expect(eval_count).to eq(1)
         end
 
         it "evals the block when given" do
           key = "#{__FILE__}:#{__LINE__}"
-          shared_examples(key) do
-            it("does something") do
-              expect(foo).to eq("bar")
+          group = RSpec.describe do
+            shared_examples(key) do
+              it("does something") do
+                expect(foo).to eq("bar")
+              end
             end
-          end
-          group = ExampleGroup.describe do
+
             send name, key do
               def foo; "bar"; end
             end
           end
-          expect(group.run).to be_true
+          expect(group.run).to be(true)
         end
       end
     end
 
-    describe "#it_should_behave_like" do
+    describe "#it_behaves_like" do
       it "creates a nested group" do
-        shared_examples_for("thing") {}
-        group = ExampleGroup.describe('fake group')
-        group.it_should_behave_like("thing")
-        expect(group).to have(1).children
+        group = RSpec.describe('fake group')
+        group.shared_examples_for("thing") {}
+        group.it_behaves_like("thing")
+        expect(group.children.count).to eq(1)
       end
 
       it "creates a nested group for a class" do
         klass = Class.new
-        shared_examples_for(klass) {}
-        group = ExampleGroup.describe('fake group')
-        group.it_should_behave_like(klass)
-        expect(group).to have(1).children
+        group = RSpec.describe('fake group')
+        group.shared_examples_for(klass) {}
+        group.it_behaves_like(klass)
+        expect(group.children.count).to eq(1)
       end
 
       it "adds shared examples to nested group" do
-        shared_examples_for("thing") do
+        group = RSpec.describe('fake group')
+        group.shared_examples_for("thing") do
           it("does something")
         end
-        group = ExampleGroup.describe('fake group')
-        shared_group = group.it_should_behave_like("thing")
-        expect(shared_group).to have(1).examples
+        shared_group = group.it_behaves_like("thing")
+        expect(shared_group.examples.count).to eq(1)
       end
 
       it "adds shared instance methods to nested group" do
-        shared_examples_for("thing") do
+        group = RSpec.describe('fake group')
+        group.shared_examples_for("thing") do
           def foo; end
         end
-        group = ExampleGroup.describe('fake group')
-        shared_group = group.it_should_behave_like("thing")
+        shared_group = group.it_behaves_like("thing")
         expect(shared_group.public_instance_methods.map{|m| m.to_s}).to include("foo")
       end
 
       it "adds shared class methods to nested group" do
-        shared_examples_for("thing") do
+        group = RSpec.describe('fake group')
+        group.shared_examples_for("thing") do
           def self.foo; end
         end
-        group = ExampleGroup.describe('fake group')
-        shared_group = group.it_should_behave_like("thing")
+        shared_group = group.it_behaves_like("thing")
         expect(shared_group.methods.map{|m| m.to_s}).to include("foo")
       end
 
       it "passes parameters to the shared example group" do
         passed_params = {}
 
-        shared_examples_for("thing") do |param1, param2|
-          it("has access to the given parameters") do
-            passed_params[:param1] = param1
-            passed_params[:param2] = param2
+        group = RSpec.describe("group") do
+          shared_examples_for("thing") do |param1, param2|
+            it("has access to the given parameters") do
+              passed_params[:param1] = param1
+              passed_params[:param2] = param2
+            end
           end
+
+          it_behaves_like "thing", :value1, :value2
         end
 
-        group = ExampleGroup.describe("group") do
-          it_should_behave_like "thing", :value1, :value2
-        end
         group.run
 
         expect(passed_params).to eq({ :param1 => :value1, :param2 => :value2 })
       end
 
       it "adds shared instance methods to nested group" do
-        shared_examples_for("thing") do |param1|
+        group = RSpec.describe('fake group')
+        group.shared_examples_for("thing") do |param1|
           def foo; end
         end
-        group = ExampleGroup.describe('fake group')
-        shared_group = group.it_should_behave_like("thing", :a)
+        shared_group = group.it_behaves_like("thing", :a)
         expect(shared_group.public_instance_methods.map{|m| m.to_s}).to include("foo")
       end
 
       it "evals the shared example group only once" do
         eval_count = 0
-        shared_examples_for("thing") { |p| eval_count += 1 }
-        group = ExampleGroup.describe('fake group')
-        group.it_should_behave_like("thing", :a)
+        group = RSpec.describe('fake group')
+        group.shared_examples_for("thing") { |p| eval_count += 1 }
+        group.it_behaves_like("thing", :a)
         expect(eval_count).to eq(1)
       end
 
       context "given a block" do
         it "evaluates the block in nested group" do
           scopes = []
-          shared_examples_for("thing") do
-            it("gets run in the nested group") do
-              scopes << self.class
+          group = RSpec.describe("group") do
+            shared_examples_for("thing") do
+              it("gets run in the nested group") do
+                scopes << self.class
+              end
             end
-          end
-          group = ExampleGroup.describe("group") do
-            it_should_behave_like "thing" do
+            it_behaves_like "thing" do
               it("gets run in the same nested group") do
                 scopes << self.class
               end
@@ -1166,11 +1825,195 @@ module RSpec::Core
 
       it "raises a helpful error message when shared context is not found" do
         expect do
-          ExampleGroup.describe do
-            it_should_behave_like "shared stuff"
+          RSpec.describe do
+            it_behaves_like "shared stuff"
           end
         end.to raise_error(ArgumentError,%q|Could not find shared examples "shared stuff"|)
       end
+
+      it "leaves RSpec's thread metadata unchanged" do
+        expect {
+          RSpec.describe do
+            shared_examples_for("stuff") { }
+            it_behaves_like "stuff"
+          end
+        }.to avoid_changing(RSpec::Support, :thread_local_data)
+      end
+
+      it "leaves RSpec's thread metadata unchanged, even when an error occurs during evaluation" do
+        expect {
+          RSpec.describe do
+            shared_examples_for("stuff") { }
+            it_behaves_like "stuff" do
+              raise "boom"
+            end
+          end
+        }.to raise_error("boom").and avoid_changing(RSpec::Support, :thread_local_data)
+      end
+    end
+
+    it 'minimizes the number of methods that users could inadvertantly overwrite' do
+      rspec_core_methods = ExampleGroup.instance_methods -
+        RSpec::Matchers.instance_methods -
+        RSpec::Mocks::ExampleMethods.instance_methods -
+        Object.instance_methods -
+        ["singleton_class"]
+
+      # Feel free to expand this list if you intend to add another public API
+      # for users. RSpec internals should not add methods here, though.
+      expect(rspec_core_methods.map(&:to_sym)).to contain_exactly(
+        :described_class, :subject,
+        :is_expected,
+        :pending, :skip,
+        :setup_mocks_for_rspec, :teardown_mocks_for_rspec, :verify_mocks_for_rspec
+      )
+    end
+
+    it 'prevents defining nested isolated contexts' do
+      expect {
+        RSpec.describe do
+          describe {}
+          RSpec.describe {}
+        end
+      }.to raise_error(/not allowed/)
+    end
+
+    it 'prevents defining nested isolated shared contexts' do
+      expect {
+        RSpec.describe do
+          ExampleGroup.shared_examples("common functionality") {}
+        end
+      }.to raise_error(/not allowed/)
+    end
+
+    describe 'inspect output' do
+      context 'when there is no inspect output provided' do
+        it "uses '(no description provided)' instead" do
+          expect(ExampleGroup.new.inspect).to eq('#<RSpec::Core::ExampleGroup (no description provided)>')
+        end
+      end
+
+      context 'when an example has a description' do
+        it 'includes description and location' do
+          an_example = nil
+
+          line = __LINE__ + 2
+          group = RSpec.describe 'SomeClass1' do
+            example 'an example' do
+              an_example = self
+            end
+          end
+
+          group.run
+
+          path = RSpec::Core::Metadata.relative_path(__FILE__)
+          expect(an_example.inspect).to eq("#<RSpec::ExampleGroups::SomeClass1 \"an example\" (#{path}:#{line})>")
+        end
+      end
+
+      context 'when an example does not have a description' do
+        it 'includes fallback description' do
+          an_example = nil
+
+          line = __LINE__ + 2
+          group = RSpec.describe 'SomeClass2' do
+            example do
+              an_example = self
+            end
+          end
+
+          group.run
+
+          path = RSpec::Core::Metadata.relative_path(__FILE__)
+          expect(an_example.inspect).to eq("#<RSpec::ExampleGroups::SomeClass2 \"example at #{path}:#{line}\">")
+        end
+      end
+
+      it 'handles before context hooks' do
+        a_before_hook = nil
+
+        group = RSpec.describe 'SomeClass3' do
+          before(:context) do
+            a_before_hook = self
+          end
+
+          example {}
+        end
+
+        group.run
+        expect(a_before_hook.inspect).to eq("#<RSpec::ExampleGroups::SomeClass3 before(:context) hook>")
+      end
+
+      it 'handles after context hooks' do
+        an_after_hook = nil
+
+        group = RSpec.describe 'SomeClass4' do
+          after(:context) do
+            an_after_hook = self
+          end
+
+          example {}
+        end
+
+        group.run
+        expect(an_after_hook.inspect).to eq("#<RSpec::ExampleGroups::SomeClass4 after(:context) hook>")
+      end
+
+      it "does not pollute an example's `inspect` output with the inspect ivar from `before(:context)`" do
+        inspect_output = nil
+
+        line = __LINE__ + 2
+        group = RSpec.describe do
+          example do
+            inspect_output = inspect
+          end
+
+          before(:context) {}
+        end
+
+        group.run
+
+        path = RSpec::Core::Metadata.relative_path(__FILE__)
+        expect(inspect_output).to end_with("\"example at #{path}:#{line}\">")
+      end
+    end
+
+    def group_ids group
+      ids = []
+      ['descendant_filtered_examples', 'descendants',
+       'parent_groups', 'declaration_locations', 'before_context_ivars'].each do |method|
+        ids << group.send(method).object_id
+      end
+      ids
+    end
+
+    it 'allows adding examples' do
+      group = RSpec.describe('group') do
+          example('ex 1') { expect(1).to eq(1) }
+      end
+
+      # ids should remain the same until we add/remove an example
+      original_ids = group_ids group
+      expect(original_ids).to eq(group_ids(group))
+
+      group.add_example group.examples.first
+      expect(group.examples.length).to eq(2)
+      expect(original_ids).to_not eq(group_ids(group))
+    end
+
+    it 'allows removing examples' do
+      group = RSpec.describe('group') do
+        example('ex 1') { expect(1).to eq(1) }
+      end
+      group.add_example group.examples.first
+
+      # ids should remain the same until we add/remove an example
+      original_ids = group_ids group
+      expect(original_ids).to eq(group_ids(group))
+
+      group.remove_example group.examples.first
+      expect(group.examples.length).to eq(0)
+      expect(original_ids).to_not eq(group_ids(group))
     end
   end
 end
