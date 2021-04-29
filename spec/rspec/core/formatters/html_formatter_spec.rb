@@ -1,41 +1,32 @@
-require 'spec_helper'
+# encoding: utf-8
 require 'rspec/core/formatters/html_formatter'
-require 'nokogiri'
 
 module RSpec
   module Core
     module Formatters
-      describe HtmlFormatter, :if => RUBY_VERSION =~ /^(1.8.7|1.9.2|1.9.3)$/ do
-        let(:jruby?) { ::RUBY_PLATFORM == 'java' }
-        let(:root)   { File.expand_path("#{File.dirname(__FILE__)}/../../../..") }
-        let(:suffix) { jruby? ? '-jruby' : '' }
+      RSpec.describe HtmlFormatter do
+        include FormatterSupport
+
+        let(:root) { File.expand_path("#{File.dirname(__FILE__)}/../../../..") }
 
         let(:expected_file) do
-          "#{File.dirname(__FILE__)}/html_formatted-#{::RUBY_VERSION}#{suffix}.html"
+          "#{File.dirname(__FILE__)}/html_formatted.html"
         end
 
-        let(:generated_html) do
-          options = RSpec::Core::ConfigurationOptions.new(
-            %w[spec/rspec/core/resources/formatter_specs.rb --format html --order default]
-          )
-          options.parse_options
-          err, out = StringIO.new, StringIO.new
-          command_line = RSpec::Core::CommandLine.new(options)
-          command_line.run(err, out)
-          out.string.gsub(/\d+\.\d+(s| seconds)/, "n.nnnn\\1")
+        let(:actual_html) do
+          run_example_specs_with_formatter('html') do |runner|
+            allow(runner.configuration).to receive(:load_spec_files) do
+              runner.configuration.files_to_run.map { |f| load File.expand_path(f) }
+            end
+
+            # This is to minimize churn on backtrace lines
+            runner.configuration.backtrace_exclusion_patterns << /.*/
+            runner.configuration.backtrace_inclusion_patterns << /formatter_specs\.rb/
+          end
         end
 
         let(:expected_html) do
-          unless File.file?(expected_file)
-            raise "There is no HTML file with expected content for this platform: #{expected_file}"
-          end
           File.read(expected_file)
-        end
-
-        before do
-          RSpec.configuration.stub(:load_spec_files) do
-            RSpec.configuration.files_to_run.map {|f| load File.expand_path(f) }
-          end
         end
 
         # Uncomment this group temporarily in order to overwrite the expected
@@ -43,7 +34,7 @@ module RSpec
         describe "file generator", :if => ENV['GENERATE'] do
           it "generates a new comparison file" do
             Dir.chdir(root) do
-              File.open(expected_file, 'w') {|io| io.write(generated_html)}
+              File.open(expected_file, 'w') {|io| io.write(actual_html)}
             end
           end
         end
@@ -55,24 +46,29 @@ module RSpec
             select  {|e| e =~ /formatter_specs\.rb/}
         end
 
-        it "produces HTML identical to the one we designed manually" do
-          Dir.chdir(root) do
-            actual_doc = Nokogiri::HTML(generated_html)
-            actual_backtraces = extract_backtrace_from(actual_doc)
-            actual_doc.css("div.backtrace").remove
+        describe 'produced HTML', :if => RUBY_VERSION <= '2.0.0' do
+          # Rubies before 2 are a wild west of different outputs, and it's not
+          # worth the effort to maintain accurate fixtures for all of them.
+          # Since we are verifying fixtures on other rubies, if this code at
+          # least runs we can be reasonably confident the output is right since
+          # behaviour variances that we care about across versions is neglible.
+          it 'is present' do
+            expect(actual_html).to be
+          end
+        end
 
-            expected_doc = Nokogiri::HTML(expected_html)
-            expected_backtraces = extract_backtrace_from(expected_doc)
-            expected_doc.search("div.backtrace").remove
+        describe 'produced HTML', :slow, :if => RUBY_VERSION >= '2.0.0' do
+          it "is identical to the one we designed manually", :pending => (defined?(RUBY_ENGINE) && RUBY_ENGINE == 'jruby') do
+            expect(actual_html).to eq(expected_html)
+          end
 
-            actual_doc.inner_html.should eq(expected_doc.inner_html)
+          context 'with mathn loaded' do
+            include MathnIntegrationSupport
 
-            expected_backtraces.each_with_index do |expected_line, i|
-              expected_path, expected_line_number, expected_suffix = expected_line.split(':')
-              actual_path, actual_line_number, actual_suffix = actual_backtraces[i].split(':')
-              File.expand_path(actual_path).should eq(File.expand_path(expected_path))
-              actual_line_number.should eq(expected_line_number)
-              actual_suffix.should eq(expected_suffix)
+            it "is identical to the one we designed manually", :slow, :pending => (defined?(RUBY_ENGINE) && RUBY_ENGINE == 'jruby') do
+              with_mathn_loaded do
+                expect(actual_html).to eq(expected_html)
+              end
             end
           end
         end

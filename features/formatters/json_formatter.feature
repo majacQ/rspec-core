@@ -2,14 +2,14 @@ Feature: JSON formatter
 
   Scenario: Formatting example names for retry
     Given a file named "various_spec.rb" with:
-    """
-    describe "Various" do
+    """ruby
+    RSpec.describe "Various" do
       it "fails" do
-        "fail".should eq("succeed")
+        expect("fail").to eq("succeed")
       end
 
       it "succeeds" do
-        "succeed".should eq("succeed")
+        expect("succeed").to eq("succeed")
       end
 
       it "pends"

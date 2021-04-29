@@ -6,7 +6,6 @@ require "rake"
 require "yaml"
 
 require "rspec/core/rake_task"
-require "rspec/core/version"
 
 require "cucumber/rake/task"
 Cucumber::Rake::Task.new(:cucumber)
@@ -22,37 +21,16 @@ namespace :spec do
     t.ruby_opts = %w[-w]
     t.rspec_opts = %w[--tag ui]
   end
-
-  desc "Runs all specs together and then file-by-file"
-  task :ci do
-    sh "script/test_all"
-  end
 end
 
-if RUBY_VERSION.to_f == 1.8
-  namespace :rcov do
-    task :cleanup do
-      rm_rf 'coverage.data'
-    end
-
-    RSpec::Core::RakeTask.new :spec do |t|
-      t.rcov = true
-      t.rcov_opts =  %[-Ilib -Ispec --exclude "gems/*,features" --sort coverage --aggregate coverage.data]
-    end
-
-    Cucumber::Rake::Task.new :cucumber do |t|
-      t.cucumber_opts = %w{--format progress}
-      t.rcov = true
-      t.rcov_opts =  %[-Ilib -Ispec --exclude "gems/*,features" --sort coverage --aggregate coverage.data]
-    end
-  end
-
-  task :rcov => ["rcov:cleanup", "rcov:cucumber", "rcov:spec"]
+desc 'Run RuboCop on the lib directory'
+task :rubocop do
+  sh 'bundle exec rubocop lib'
 end
 
 desc "delete generated files"
 task :clobber do
-  sh %q{find . -name "*.rbc" | xargs rm}
+  sh 'find . -name "*.rbc" | xargs rm'
   sh 'rm -rf pkg'
   sh 'rm -rf tmp'
   sh 'rm -rf coverage'
@@ -65,17 +43,43 @@ task :rdoc do
   sh "yardoc"
 end
 
-desc "Push docs/cukes to relishapp using the relish-client-gem"
-task :relish, :version do |t, args|
-  raise "rake relish[VERSION]" unless args[:version]
-  sh "cp Changelog.md features/"
-  if `relish versions rspec/rspec-core`.split.map(&:strip).include? args[:version]
-    puts "Version #{args[:version]} already exists"
-  else
-    sh "relish versions:add rspec/rspec-core:#{args[:version]}"
+with_changelog_in_features = lambda do |&block|
+  begin
+    sh "cp Changelog.md features/"
+    block.call
+  ensure
+    sh "rm features/Changelog.md"
   end
-  sh "relish push rspec/rspec-core:#{args[:version]}"
-  sh "rm features/Changelog.md"
 end
 
-task :default => ["spec:ci", :cucumber]
+desc "Push docs/cukes to relishapp using the relish-client-gem"
+task :relish, :version do |_t, args|
+  raise "rake relish[VERSION]" unless args[:version]
+
+  with_changelog_in_features.call do
+    if `relish versions rspec/rspec-core`.split.map(&:strip).include? args[:version]
+      puts "Version #{args[:version]} already exists"
+    else
+      sh "relish versions:add rspec/rspec-core:#{args[:version]}"
+    end
+    sh "relish push rspec/rspec-core:#{args[:version]}"
+  end
+end
+
+desc "Push to relish staging environment"
+task :relish_staging do
+  with_changelog_in_features.call do
+    sh "relish push rspec-staging/rspec-core"
+  end
+end
+
+task :default => [:spec, :cucumber, :rubocop]
+
+task :verify_private_key_present do
+  private_key = File.expand_path('~/.gem/rspec-gem-private_key.pem')
+  unless File.exist?(private_key)
+    raise "Your private key is not present. This gem should not be built without it."
+  end
+end
+
+task :build => :verify_private_key_present

@@ -1,4 +1,4 @@
-shared_context "spec files" do
+RSpec.shared_context "spec files" do
   def failing_spec_filename
     @failing_spec_filename ||= File.expand_path(File.dirname(__FILE__)) + "/_failing_spec.rb"
   end
@@ -10,9 +10,9 @@ shared_context "spec files" do
   def create_passing_spec_file
     File.open(passing_spec_filename, 'w') do |f|
       f.write %q{
-        describe "passing spec" do
+        RSpec.describe "passing spec" do
           it "passes" do
-            1.should eq(1)
+            expect(1).to eq(1)
           end
         end
       }
@@ -22,9 +22,9 @@ shared_context "spec files" do
   def create_failing_spec_file
     File.open(failing_spec_filename, 'w') do |f|
       f.write %q{
-        describe "failing spec" do
+        RSpec.describe "failing spec" do
           it "fails" do
-            1.should eq(2)
+            expect(1).to eq(2)
           end
         end
       }

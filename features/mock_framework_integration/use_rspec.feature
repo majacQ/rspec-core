@@ -1,56 +1,55 @@
 Feature: mock with rspec
 
-  RSpec uses its own mocking framework by default, or you can configure it
-  explicitly.
+  RSpec uses its own mocking framework by default. You can also configure it
+  explicitly if you wish.
 
-  Scenario: passing message expectation
+  Scenario: Passing message expectation
     Given a file named "example_spec.rb" with:
-      """
+      """ruby
       RSpec.configure do |config|
-        config.mock_framework = :rspec
+        config.mock_with :rspec
       end
 
-      describe "mocking with RSpec" do
+      RSpec.describe "mocking with RSpec" do
         it "passes when it should" do
           receiver = double('receiver')
-          receiver.should_receive(:message)
+          expect(receiver).to receive(:message)
           receiver.message
         end
       end
       """
     When I run `rspec example_spec.rb`
-    Then the examples should all pass 
+    Then the examples should all pass
 
-  Scenario: failing message expecation
+  Scenario: Failing message expectation
     Given a file named "example_spec.rb" with:
-      """
+      """ruby
       RSpec.configure do |config|
-        config.mock_framework = :rspec
+        config.mock_with :rspec
       end
 
-      describe "mocking with RSpec" do
+      RSpec.describe "mocking with RSpec" do
         it "fails when it should" do
           receiver = double('receiver')
-          receiver.should_receive(:message)
+          expect(receiver).to receive(:message)
         end
       end
       """
     When I run `rspec example_spec.rb`
     Then the output should contain "1 example, 1 failure"
 
-  Scenario: failing message expectation in pending block (remains pending)
+  Scenario: Failing message expectation in pending example (remains pending)
     Given a file named "example_spec.rb" with:
-      """
+      """ruby
       RSpec.configure do |config|
-        config.mock_framework = :rspec
+        config.mock_with :rspec
       end
 
-      describe "failed message expectation in a pending block" do
+      RSpec.describe "failed message expectation in a pending example" do
         it "is listed as pending" do
-          pending do
-            receiver = double('receiver')
-            receiver.should_receive(:message)
-          end
+          pending
+          receiver = double('receiver')
+          expect(receiver).to receive(:message)
         end
       end
       """
@@ -58,20 +57,19 @@ Feature: mock with rspec
     Then the output should contain "1 example, 0 failures, 1 pending"
     And the exit status should be 0
 
-  Scenario: passing message expectation in pending block (fails)
+  Scenario: Passing message expectation in pending example (fails)
     Given a file named "example_spec.rb" with:
-      """
+      """ruby
       RSpec.configure do |config|
-        config.mock_framework = :rspec
+        config.mock_with :rspec
       end
 
-      describe "passing message expectation in a pending block" do
+      RSpec.describe "passing message expectation in a pending example" do
         it "fails with FIXED" do
-          pending do
-            receiver = double('receiver')
-            receiver.should_receive(:message)
-            receiver.message
-          end
+          pending
+          receiver = double('receiver')
+          expect(receiver).to receive(:message)
+          receiver.message
         end
       end
       """
@@ -80,18 +78,36 @@ Feature: mock with rspec
     Then the output should contain "1 example, 1 failure"
     And the exit status should be 1
 
-  Scenario: accessing RSpec.configuration.mock_framework.framework_name 
+  Scenario: Accessing `RSpec.configuration.mock_framework.framework_name`
     Given a file named "example_spec.rb" with:
-      """
+      """ruby
       RSpec.configure do |config|
-        config.mock_framework = :rspec
+        config.mock_with :rspec
       end
 
-      describe "RSpec.configuration.mock_framework.framework_name" do
+      RSpec.describe "RSpec.configuration.mock_framework.framework_name" do
         it "returns :rspec" do
-          RSpec.configuration.mock_framework.framework_name.should eq(:rspec)
+          expect(RSpec.configuration.mock_framework.framework_name).to eq(:rspec)
         end
       end
       """
     When I run `rspec example_spec.rb`
-    Then the examples should all pass 
+    Then the examples should all pass
+
+  Scenario: Doubles may be used in generated descriptions
+    Given a file named "example_spec.rb" with:
+      """ruby
+      RSpec.configure do |config|
+        config.mock_with :rspec
+      end
+
+      RSpec.describe "Testing" do
+        # Examples with no descriptions will default to RSpec-generated descriptions
+        it do
+          foo = double("Test")
+          expect(foo).to be foo
+        end
+      end
+      """
+    When I run `rspec example_spec.rb`
+    Then the examples should all pass
