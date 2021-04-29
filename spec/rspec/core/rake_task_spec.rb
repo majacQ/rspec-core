@@ -28,7 +28,7 @@ module RSpec::Core
         end
 
         expect(the_task).to receive(:run_task) { true }
-        expect(Rake.application.invoke_task("rake_task_args[first_spec.rb]")).to be_truthy
+        Rake.application.invoke_task("rake_task_args[first_spec.rb]")
       end
     end
 
@@ -40,14 +40,14 @@ module RSpec::Core
       end
     end
 
-    context "with space", :unless => RSpec::Support::OS.windows? do
+    context "with space", :skip => RSpec::Support::OS.windows? do
       it "renders rspec with space escaped" do
         task.rspec_path = '/path with space/exe/rspec'
         expect(spec_command).to match(/^#{ruby} #{default_load_path_opts} \/path\\ with\\ space\/exe\/rspec/)
       end
     end
 
-    context "on windows, with a quote in the name", :if => RSpec::Support::OS.windows? do
+    context "on windows, with a quote in the name", :skip => !RSpec::Support::OS.windows? do
       it "renders rspec quoted, with quote escaped" do
         task.rspec_path = "/foo'bar/exe/rspec"
         expect(spec_command).to include(%q|'/foo\'bar/exe/rspec'|)
@@ -66,6 +66,22 @@ module RSpec::Core
         task.rspec_opts = "-Ifoo"
         expect(spec_command).to match(/#{task.rspec_path}.*-Ifoo/)
       end
+
+      it "doesn't add a default pattern that would override CLI configuration from files" do
+        expect(spec_command).to exclude("--pattern")
+      end
+
+      it 'only uses the pattern passed via rspec_opts' do
+        task.rspec_opts = "--pattern some_specs"
+        expect(spec_command).to include("--pattern some_specs")
+        expect(spec_command).to include("--pattern").once
+      end
+
+      it 'behaves properly if rspec_opts is an array' do
+        task.rspec_opts = %w[--pattern some_specs]
+        expect(spec_command).to include("--pattern some_specs")
+        expect(spec_command).to include("--pattern").once
+      end
     end
 
     context "with pattern" do
@@ -74,7 +90,7 @@ module RSpec::Core
         expect(spec_command).to match(/ --pattern '?complex_pattern'?/)
       end
 
-      it "shellescapes the pattern as necessary", :unless => RSpec::Support::OS.windows? do
+      it "shellescapes the pattern as necessary", :skip => RSpec::Support::OS.windows? do
         task.pattern = "foo'bar"
         expect(spec_command).to include(" --pattern foo\\'bar")
       end
@@ -138,6 +154,24 @@ module RSpec::Core
           task.ruby_opts = '-e "exit(1);" ;#'
           task.run_task false
         }.to avoid_outputting.to_stdout.and avoid_outputting.to_stderr
+      end
+    end
+
+    context "with_clean_environment is set" do
+      it "removes the environment variables", :skip => RSpec::Support::Ruby.jruby? do
+        with_env_vars 'MY_ENV' => 'ABC' do
+          if RSpec::Support::OS.windows?
+            essential_shell_variables = /\["ANSICON", "ANSICON_DEF", "HOME", "TMPDIR", "USER"\]/
+          else
+            essential_shell_variables = /\["PWD"(?:, "SHLVL")?(?:, "_")?(?:, "__CF_USER_TEXT_ENCODING")?\]/
+          end
+
+          expect {
+            task.with_clean_environment = true
+            task.ruby_opts = '-e "puts \"Environment: #{ENV.keys.sort.inspect}\""'
+            task.run_task false
+          }.to avoid_outputting.to_stderr.and output(essential_shell_variables).to_stdout_from_any_process
+        end
       end
     end
 
@@ -272,9 +306,7 @@ module RSpec::Core
       end
 
       context "that is an absolute path file glob" do
-        it "loads the matching spec files", :failing_on_appveyor,
-        :pending => false,
-        :skip => (ENV['APPVEYOR'] ? "Failing on AppVeyor but :pending isn't working for some reason" : false) do
+        it "loads the matching spec files" do
           dir = File.expand_path("../resources", __FILE__)
           task.pattern = File.join(dir, "**/*_spec.rb")
 
@@ -383,7 +415,7 @@ module RSpec::Core
         make_files_in_dir "acceptance"
       end
 
-      it "shellescapes the pattern as necessary", :unless => RSpec::Support::OS.windows? do
+      it "shellescapes the pattern as necessary", :skip => RSpec::Support::OS.windows? do
         task.exclude_pattern = "foo'bar"
         expect(spec_command).to include(" --exclude-pattern foo\\'bar")
       end
@@ -407,7 +439,7 @@ module RSpec::Core
     context "with paths with quotes or spaces" do
       include_context "isolated directory"
 
-      it "matches files with quotes and spaces", :failing_on_appveyor do
+      it "matches files with quotes and spaces", :failing_on_windows_ci do
         spec_dir = File.join(Dir.getwd, "spec")
         task.pattern = "spec/*spec.rb"
         FileUtils.mkdir_p(spec_dir)

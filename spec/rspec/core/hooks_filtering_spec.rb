@@ -83,33 +83,36 @@ module RSpec::Core
         ]
       end
 
-      it "applies only to examples with matching metadata" do
-        sequence = []
+      { ":example" => [:example], ":each" => [:each] }.each do |label, args|
+        args << :run_hooks
+        it "applies only to examples with matching metadata (for hooks declared with #{label})" do
+          sequence = []
 
-        group = RSpec.describe do
-          example("") { sequence << :ex_1 }
-          example("", :run_hooks) { sequence << :ex_2 }
-        end
-
-        RSpec.configure do |c|
-          c.before(:example, :run_hooks) { sequence << :before_ex_2 }
-          c.prepend_before(:example, :run_hooks) { sequence << :before_ex_1 }
-
-          c.after(:example, :run_hooks)  { sequence << :after_ex_1 }
-          c.append_after(:example, :run_hooks) { sequence << :after_ex_2 }
-
-          c.around(:example, :run_hooks) do |ex|
-            sequence << :around_before_ex
-            ex.run
-            sequence << :around_after_ex
+          group = RSpec.describe do
+            example("") { sequence << :ex_1 }
+            example("", :run_hooks) { sequence << :ex_2 }
           end
-        end
 
-        group.run
-        expect(sequence).to eq [
-          :ex_1,
-          :around_before_ex, :before_ex_1, :before_ex_2, :ex_2, :after_ex_1, :after_ex_2, :around_after_ex,
-        ]
+          RSpec.configure do |c|
+            c.before(*args) { sequence << :before_ex_2 }
+            c.prepend_before(*args) { sequence << :before_ex_1 }
+
+            c.after(*args)  { sequence << :after_ex_1 }
+            c.append_after(*args) { sequence << :after_ex_2 }
+
+            c.around(*args) do |ex|
+              sequence << :around_before_ex
+              ex.run
+              sequence << :around_after_ex
+            end
+          end
+
+          group.run
+          expect(sequence).to eq [
+            :ex_1,
+            :around_before_ex, :before_ex_1, :before_ex_2, :ex_2, :after_ex_1, :after_ex_2, :around_after_ex,
+          ]
+        end
       end
 
       it "does not apply `suite` hooks to groups (or print warnings about suite hooks applied to example groups)" do
@@ -128,6 +131,62 @@ module RSpec::Core
 
         group.run
         expect(sequence).to eq [:example]
+      end
+
+      it "only runs example hooks once when there are multiple nested example groups" do
+        sequence = []
+
+        group = RSpec.describe do
+          context do
+            example { sequence << :ex_1 }
+            example { sequence << :ex_2 }
+          end
+        end
+
+        RSpec.configure do |c|
+          c.before(:example) { sequence << :before_ex_2 }
+          c.prepend_before(:example) { sequence << :before_ex_1 }
+
+          c.after(:example)  { sequence << :after_ex_1 }
+          c.append_after(:example) { sequence << :after_ex_2 }
+
+          c.around(:example) do |ex|
+            sequence << :around_before_ex
+            ex.run
+            sequence << :around_after_ex
+          end
+        end
+
+        group.run
+
+        expect(sequence).to eq [
+          :around_before_ex, :before_ex_1, :before_ex_2, :ex_1, :after_ex_1, :after_ex_2, :around_after_ex,
+          :around_before_ex, :before_ex_1, :before_ex_2, :ex_2, :after_ex_1, :after_ex_2, :around_after_ex
+        ]
+      end
+
+      it "only runs context hooks around the highest level group with matching filters" do
+        sequence = []
+
+        group = RSpec.describe do
+          before(:context) { sequence << :before_context }
+          after(:context)  { sequence << :after_context }
+
+          context "", :match do
+            context "", :match do
+              example { sequence << :example }
+            end
+          end
+        end
+
+        RSpec.configure do |config|
+          config.before(:context, :match) { sequence << :before_hook }
+          config.after(:context, :match)  { sequence << :after_hook }
+        end
+
+        group.run
+
+        expect(sequence).to eq [:before_context, :before_hook, :example, :after_hook, :after_context]
       end
     end
 
@@ -256,6 +315,57 @@ module RSpec::Core
         end
         group = RSpec.describe(:match => true)
         group.example("example") {}
+        group.run
+        expect(filters).to eq([])
+      end
+
+      it "runs :all|:context hooks even if there are no unskipped examples in that context" do
+        filters = []
+        group = RSpec.describe("un-skipped describe") do
+          before(:all) { filters << "before all in group"}
+          after(:all) { filters << "after all in group"}
+
+          xcontext("skipped context") do
+            before(:context) { filters << "before context in group"}
+            after(:context) { filters << "after context in group"}
+
+            it("is skipped") {}
+          end
+        end
+        group.run
+        expect(filters).to eq(["before all in group", "after all in group"])
+      end
+
+      it "does not run :all|:context hooks in global config if the entire context is skipped" do
+        filters = []
+        RSpec.configure do |c|
+          c.before(:all) { filters << "before all in config"}
+          c.after(:all) { filters << "after all in config"}
+          c.before(:context) { filters << "before context in config"}
+          c.after(:context) { filters << "after context in config"}
+        end
+        group = RSpec.xdescribe("skipped describe") do
+          context("skipped context") do
+            it("is skipped") {}
+          end
+        end
+        group.run
+        expect(filters).to eq([])
+      end
+
+      it "does not run local :all|:context hooks if the entire context is skipped" do
+        filters = []
+        group = RSpec.xdescribe("skipped describe") do
+          before(:all) { filters << "before all in group"}
+          after(:all) { filters << "after all in group"}
+
+          context("skipped context") do
+            before(:context) { filters << "before context in group"}
+            after(:context) { filters << "after context in group"}
+
+            it("is skipped") {}
+          end
+        end
         group.run
         expect(filters).to eq([])
       end

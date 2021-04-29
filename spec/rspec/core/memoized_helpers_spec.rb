@@ -107,7 +107,7 @@ module RSpec::Core
           end.new 1
         end
 
-        it { should be_working_with double(:value => 10) }
+        it { is_expected.to be_working_with double(:value => 10) }
       end
 
       [false, nil].each do |falsy_value|
@@ -331,9 +331,9 @@ module RSpec::Core
           def ok?; true; end
           def not_ok?; false; end
 
-          it { should eq(self) }
-          it { should be_ok }
-          it { should_not be_not_ok }
+          it { is_expected.to eq(self) }
+          it { is_expected.to be_ok }
+          it { is_expected.not_to be_not_ok }
         end
 
         expect(group.run).to be true
@@ -520,6 +520,30 @@ module RSpec::Core
       end.to raise_error(/#let or #subject called without a block/)
     end
 
+    it 'raises an error when attempting to define a reserved name #initialize' do
+      expect do
+        RSpec.describe { let(:initialize) { true } }
+      end.to raise_error(/#let or #subject called with reserved name `initialize`/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #initialize as a string' do
+      expect do
+        RSpec.describe { let('initialize') { true } }
+      end.to raise_error(/#let or #subject called with reserved name `initialize`/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #to_s' do
+      expect do
+        RSpec.describe { let(:to_s) { true } }
+      end.to raise_error(/#let or #subject called with reserved name `to_s`/)
+    end
+
+    it 'raises an error when attempting to define a reserved name #to_s as a string' do
+      expect do
+        RSpec.describe { let('to_s') { true } }
+      end.to raise_error(/#let or #subject called with reserved name `to_s`/)
+    end
+
     let(:a_value) { "a string" }
 
     context 'when overriding let in a nested context' do
@@ -609,26 +633,25 @@ module RSpec::Core
 
     describe Object do
       context 'with implicit subject' do
-        it_should_behave_like 'a subject'
+        it_behaves_like 'a subject'
       end
 
       context 'with explicit subject' do
         subject { Object.new }
-        it_should_behave_like 'a subject'
+        it_behaves_like 'a subject'
       end
 
       context 'with a constant subject'do
         subject { 123 }
-        it_should_behave_like 'a subject'
+        it_behaves_like 'a subject'
       end
     end
   end
 
   RSpec.describe 'Module#define_method' do
-    it 'is still a private method' do
+    it 'retains its normal private visibility on Ruby versions where it is normally private', :skip => RUBY_VERSION >= '2.5' do
       a_module = Module.new
       expect { a_module.define_method(:name) { "implementation" } }.to raise_error NoMethodError
     end
   end
 end
-

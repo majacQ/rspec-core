@@ -10,8 +10,6 @@ Feature: shared examples
   ```ruby
   include_examples "name"      # include the examples in the current context
   it_behaves_like "name"       # include the examples in a nested context
-  it_should_behave_like "name" # include the examples in a nested context
-  matching metadata            # include the examples in the current context
   ```
 
   **WARNING:** Files containing shared groups must be loaded before the files that
@@ -76,7 +74,7 @@ Feature: shared examples
       and require files in that directory from `spec/spec_helper.rb`:
 
       ```ruby
-      Dir["./spec/support/**/*.rb"].sort.each { |f| require f}
+      Dir["./spec/support/**/*.rb"].sort.each { |f| require f }
       ```
 
       Historically, this was included in the generated `spec/spec_helper.rb` file in
@@ -106,13 +104,13 @@ Feature: shared examples
         describe "#include?" do
           context "with an item that is in the collection" do
             it "returns true" do
-              expect(collection.include?(7)).to be_truthy
+              expect(collection.include?(7)).to be(true)
             end
           end
 
           context "with an item that is not in the collection" do
             it "returns false" do
-              expect(collection.include?(9)).to be_falsey
+              expect(collection.include?(9)).to be(false)
             end
           end
         end
@@ -206,12 +204,12 @@ Feature: shared examples
 
     RSpec.describe Array, "with 3 items" do
       subject { [1, 2, 3] }
-      it_should_behave_like "a measurable object", 3, [:size, :length]
+      it_behaves_like "a measurable object", 3, [:size, :length]
     end
 
     RSpec.describe String, "of 6 characters" do
       subject { "FooBar" }
-      it_should_behave_like "a measurable object", 6, [:size, :length]
+      it_behaves_like "a measurable object", 6, [:size, :length]
     end
     """
     When I run `rspec shared_example_group_params_spec.rb --format documentation`
@@ -219,21 +217,21 @@ Feature: shared examples
     And the output should contain:
       """
       Array with 3 items
-        it should behave like a measurable object
+        behaves like a measurable object
           should return 3 from #size
           should return 3 from #length
 
       String of 6 characters
-        it should behave like a measurable object
+        behaves like a measurable object
           should return 6 from #size
           should return 6 from #length
       """
 
-  Scenario: Aliasing `it_should_behave_like` to `it_has_behavior`
+  Scenario: Aliasing `it_behaves_like` to `it_has_behavior`
     Given a file named "shared_example_group_spec.rb" with:
       """ruby
       RSpec.configure do |c|
-        c.alias_it_should_behave_like_to :it_has_behavior, 'has behavior:'
+        c.alias_it_behaves_like_to :it_has_behavior, 'has behavior:'
       end
 
       RSpec.shared_examples 'sortability' do
@@ -255,23 +253,6 @@ Feature: shared examples
       String
         has behavior: sortability
           responds to <=>
-      """
-
-  Scenario: Sharing metadata automatically includes shared example groups
-    Given a file named "shared_example_metadata_spec.rb" with:
-      """ruby
-      RSpec.shared_examples "shared stuff", :a => :b do
-        it 'runs wherever the metadata is shared' do
-        end
-      end
-
-      RSpec.describe String, :a => :b do
-      end
-      """
-    When I run `rspec shared_example_metadata_spec.rb`
-    Then the output should contain:
-      """
-      1 example, 0 failures
       """
 
   Scenario: Shared examples are nestable by context

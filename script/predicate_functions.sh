@@ -1,4 +1,4 @@
-# This file was generated on 2016-05-11T21:32:01+10:00 from the rspec-dev repo.
+# This file was generated on 2020-12-31T00:51:08+03:00 from the rspec-dev repo.
 # DO NOT modify it by hand as your changes will get lost the next time it is generated.
 
 function is_mri {
@@ -9,6 +9,28 @@ function is_mri {
   else
     return 1
   fi;
+}
+
+function is_ruby_head {
+  # This checks for the presence of our CI's ruby-head env variable
+  if [ -z ${RUBY_HEAD+x} ]; then
+    return 1
+  else
+    return 0
+  fi;
+}
+
+function supports_cross_build_checks {
+  if is_mri; then
+    # We don't run cross build checks on ruby-head
+    if is_ruby_head; then
+      return 1
+    else
+      return 0
+    fi
+  else
+    return 1
+  fi
 }
 
 function is_jruby {
@@ -57,12 +79,41 @@ function is_mri_2plus {
   fi
 }
 
+function is_ruby_23_plus {
+  if ruby -e "exit(RUBY_VERSION.to_f >= 2.3)"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+function is_ruby_25_plus {
+  if ruby -e "exit(RUBY_VERSION.to_f >= 2.5)"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+function rspec_rails_compatible {
+  if is_ruby_25_plus; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 function rspec_support_compatible {
   if [ "$MAINTENANCE_BRANCH" != "2-99-maintenance" ] && [ "$MAINTENANCE_BRANCH" != "2-14-maintenance" ]; then
     return 0
   else
     return 1
   fi
+}
+
+function additional_specs_available {
+  type run_additional_specs > /dev/null 2>&1
+  return $?
 }
 
 function documentation_enforced {

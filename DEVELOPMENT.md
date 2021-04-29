@@ -1,12 +1,12 @@
 <!---
-This file was generated on 2015-12-07T22:01:00+11:00 from the rspec-dev repo.
+This file was generated on 2020-12-26T20:29:41+00:00 from the rspec-dev repo.
 DO NOT modify it by hand as your changes will get lost the next time it is generated.
 -->
 
 # Development Setup
 
 Generally speaking, you only need to clone the project and install
-the dependencies with [Bundler](http://bundler.io/). You can either
+the dependencies with [Bundler](https://bundler.io/). You can either
 get a full RSpec development environment using
 [rspec-dev](https://github.com/rspec/rspec-dev#README) or you can
 set this project up individually.
@@ -22,7 +22,7 @@ Clone the repo:
 $ git clone git@github.com:rspec/rspec-core.git
 ```
 
-Install the dependencies using [Bundler](http://bundler.io/):
+Install the dependencies using [Bundler](https://bundler.io/):
 
 ```
 $ cd rspec-core
@@ -31,7 +31,7 @@ $ bundle install
 
 To minimize boot time and to ensure we don't depend upon any extra dependencies
 loaded by Bundler, our CI builds avoid loading Bundler at runtime
-by using Bundler's [`--standalone option`](http://myronmars.to/n/dev-blog/2012/03/faster-test-boot-times-with-bundler-standalone).
+by using Bundler's [`--standalone option`](https://myronmars.to/n/dev-blog/2012/03/faster-test-boot-times-with-bundler-standalone).
 While not strictly necessary (many/most of our contributors do not do this!),
 if you want to exactly reproduce our CI builds you'll want to do the same:
 
@@ -51,7 +51,7 @@ The rspec-dev project contains many rake tasks for helping manage
 an RSpec development environment, making it easy to do things like:
 
 * Change branches across all repos
-* Update all repos with the latest code from `master`
+* Update all repos with the latest code from `main`
 * Cut a new release across all repos
 * Push out updated build scripts to all repos
 
@@ -108,13 +108,13 @@ Here's a short, non-exhaustive checklist of things we typically ask contributors
 - [ ] New behavior is covered by tests and all tests are passing.
 - [ ] No Ruby warnings are issued by your changes.
 - [ ] Documentation reflects changes and renders as intended.
-- [ ] Rubocop passes (e.g. `bundle exec rubocop lib`).
+- [ ] RuboCop passes (e.g. `bundle exec rubocop lib`).
 - [ ] Commits are squashed into a reasonable number of logical changesets that tell an easy-to-follow story.
 - [ ] No changelog entry is necessary (we'll add it as part of the merge process!)
 
 # Adding Docs
 
-RSpec uses [YARD](http://yardoc.org/) for its API documentation. To
+RSpec uses [YARD](https://yardoc.org/) for its API documentation. To
 ensure the docs render well, we recommend running a YARD server and
 viewing your edits in a browser.
 
@@ -129,4 +129,3 @@ $ bin/yard server --reload
 ```
 
 Then navigate to `localhost:8808` to view the rendered docs.
-

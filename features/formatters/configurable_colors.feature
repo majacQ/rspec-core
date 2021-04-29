@@ -12,14 +12,13 @@ Feature: Configurable colors
   Colors are specified as symbols. Options are `:black`, `:red`, `:green`,
   `:yellow`, `:blue`, `:magenta`, `:cyan`, and `:white`.
 
-  @ansi
+  @keep-ansi-escape-sequences
   Scenario: Customizing the failure color
     Given a file named "custom_failure_color_spec.rb" with:
       """ruby
       RSpec.configure do |config|
         config.failure_color = :magenta
-        config.tty = true
-        config.color = true
+        config.color_mode = :on
       end
 
       RSpec.describe "failure" do

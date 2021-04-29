@@ -1,3 +1,5 @@
+RSpec::Support.require_rspec_support "with_keywords_when_needed"
+
 module RSpec
   module Core
     # Represents some functionality that is shared with multiple example groups.
@@ -33,7 +35,7 @@ module RSpec
         klass.update_inherited_metadata(@metadata) unless @metadata.empty?
 
         SharedExampleGroupInclusionStackFrame.with_frame(@description, inclusion_line) do
-          klass.class_exec(*args, &@definition)
+          RSpec::Support::WithKeywordsWhenNeeded.class_exec(klass, *args, &@definition)
           klass.class_exec(&customization_block) if customization_block
         end
       end
@@ -43,9 +45,8 @@ module RSpec
     # examples that you wish to use in multiple example groups.
     #
     # When defined, the shared group block is stored for later evaluation.
-    # It can later be included in an example group either explicitly
-    # (using `include_examples`, `include_context` or `it_behaves_like`)
-    # or implicitly (via matching metadata).
+    # It can later be included in an example group explicitly using
+    # `include_examples`, `include_context` or `it_behaves_like`.
     #
     # Named shared example groups are scoped based on where they are
     # defined. Shared groups defined in an example group are available
@@ -60,14 +61,7 @@ module RSpec
       # @overload shared_examples(name, metadata, &block)
       #   @param name [String, Symbol, Module] identifer to use when looking up
       #     this shared group
-      #   @param metadata [Array<Symbol>, Hash] metadata to attach to this
-      #     group; any example group or example with matching metadata will
-      #     automatically include this shared example group.
-      #   @param block The block to be eval'd
-      # @overload shared_examples(metadata, &block)
-      #   @param metadata [Array<Symbol>, Hash] metadata to attach to this
-      #     group; any example group or example with matching metadata will
-      #     automatically include this shared example group.
+      #   @param metadata [Array<Symbol>, Hash] metadata to attach to this group
       #   @param block The block to be eval'd
       #
       # Stores the block for later use. The block will be evaluated
@@ -81,7 +75,7 @@ module RSpec
       #     end
       #   end
       #
-      #   describe Account do
+      #   RSpec.describe Account do
       #     it_behaves_like "auditable" do
       #       let(:auditable) { Account.new }
       #     end
@@ -108,7 +102,6 @@ module RSpec
       # Shared examples top level DSL.
       module TopLevelDSL
         # @private
-        # rubocop:disable Lint/NestedMethodDefinition
         def self.definitions
           proc do
             def shared_examples(name, *args, &block)
@@ -118,43 +111,15 @@ module RSpec
             alias shared_examples_for shared_examples
           end
         end
-        # rubocop:enable Lint/NestedMethodDefinition
-
-        # @private
-        def self.exposed_globally?
-          @exposed_globally ||= false
-        end
-
-        # @api private
-        #
-        # Adds the top level DSL methods to Module and the top level binding.
-        def self.expose_globally!
-          return if exposed_globally?
-          Core::DSL.change_global_dsl(&definitions)
-          @exposed_globally = true
-        end
-
-        # @api private
-        #
-        # Removes the top level DSL methods to Module and the top level binding.
-        def self.remove_globally!
-          return unless exposed_globally?
-
-          Core::DSL.change_global_dsl do
-            undef shared_examples
-            undef shared_context
-            undef shared_examples_for
-          end
-
-          @exposed_globally = false
-        end
       end
 
       # @private
       class Registry
         def add(context, name, *metadata_args, &block)
-          if RSpec.configuration.shared_context_metadata_behavior == :trigger_inclusion
-            return legacy_add(context, name, *metadata_args, &block)
+          unless block
+            RSpec.warning "Shared example group #{name} was defined without a "\
+                          "block and will have no effect. Please define a "\
+                          "block or remove the definition."
           end
 
           unless valid_name?(name)
@@ -162,7 +127,6 @@ module RSpec
                                  "symbol or module but got: #{name.inspect}"
           end
 
-          ensure_block_has_source_location(block) { CallerFilter.first_non_rspec_line }
           warn_if_key_taken context, name, block
 
           metadata = Metadata.build_hash_from(metadata_args)
@@ -181,25 +145,6 @@ module RSpec
 
       private
 
-        # TODO: remove this in RSpec 4. This exists only to support
-        # `config.shared_context_metadata_behavior == :trigger_inclusion`,
-        # the legacy behavior of shared context metadata, which we do
-        # not want to support in RSpec 4.
-        def legacy_add(context, name, *metadata_args, &block)
-          ensure_block_has_source_location(block) { CallerFilter.first_non_rspec_line }
-          shared_module = SharedExampleGroupModule.new(name, block, {})
-
-          if valid_name?(name)
-            warn_if_key_taken context, name, block
-            shared_example_groups[context][name] = shared_module
-          else
-            metadata_args.unshift name
-          end
-
-          return if metadata_args.empty?
-          RSpec.configuration.include shared_module, *metadata_args
-        end
-
         def shared_example_groups
           @shared_example_groups ||= Hash.new { |hash, context| hash[context] = {} }
         end
@@ -213,31 +158,35 @@ module RSpec
 
         def warn_if_key_taken(context, key, new_block)
           existing_module = shared_example_groups[context][key]
-
           return unless existing_module
 
-          RSpec.warn_with <<-WARNING.gsub(/^ +\|/, ''), :call_site => nil
-            |WARNING: Shared example group '#{key}' has been previously defined at:
-            |  #{formatted_location existing_module.definition}
-            |...and you are now defining it at:
-            |  #{formatted_location new_block}
-            |The new definition will overwrite the original one.
-          WARNING
+          old_definition_location = formatted_location existing_module.definition
+          new_definition_location = formatted_location new_block
+          loaded_spec_files = RSpec.configuration.loaded_spec_files
+
+          if loaded_spec_files.include?(new_definition_location) && old_definition_location == new_definition_location
+            RSpec.warn_with <<-WARNING.gsub(/^ +\|/, ''), :call_site => nil
+              |WARNING: Your shared example group, '#{key}', defined at:
+              | #{old_definition_location}
+              |was automatically loaded by RSpec because the file name
+              |matches the configured autoloading pattern (#{RSpec.configuration.pattern}),
+              |and is also being required from somewhere else. To fix this
+              |warning, either rename the file to not match the pattern, or
+              |do not explicitly require the file.
+            WARNING
+          else
+            RSpec.warn_with <<-WARNING.gsub(/^ +\|/, ''), :call_site => nil
+              |WARNING: Shared example group '#{key}' has been previously defined at:
+              |  #{old_definition_location}
+              |...and you are now defining it at:
+              |  #{new_definition_location}
+              |The new definition will overwrite the original one.
+            WARNING
+          end
         end
 
         def formatted_location(block)
-          block.source_location.join ":"
-        end
-
-        if Proc.method_defined?(:source_location)
-          def ensure_block_has_source_location(_block); end
-        else # for 1.8.7
-          # :nocov:
-          def ensure_block_has_source_location(block)
-            source_location = yield.split(':')
-            block.extend Module.new { define_method(:source_location) { source_location } }
-          end
-          # :nocov:
+          block.source_location.join(":")
         end
       end
     end

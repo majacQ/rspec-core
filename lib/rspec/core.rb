@@ -12,7 +12,6 @@ RSpec::Support.define_optimized_require_for_rspec(:core) { |f| require_relative 
   warnings
 
   set
-  flat_map
   filter_manager
   dsl
   notifications
@@ -31,6 +30,7 @@ RSpec::Support.define_optimized_require_for_rspec(:core) { |f| require_relative 
   option_parser
   configuration_options
   runner
+  invocations
   example
   shared_example_group
   example_group
@@ -55,6 +55,7 @@ module RSpec
   # they use the runner multiple times within the same process. Users must deal
   # themselves with re-configuration of RSpec before run.
   def self.reset
+    RSpec::ExampleGroups.remove_all_constants
     @world = nil
     @configuration = nil
   end
@@ -67,7 +68,7 @@ module RSpec
   # same process.
   def self.clear_examples
     world.reset
-    configuration.reporter.reset
+    configuration.reset_reporter
     configuration.start_time = ::RSpec::Core::Time.now
     configuration.reset_filters
   end
@@ -99,24 +100,7 @@ module RSpec
   # The example being executed.
   #
   # The primary audience for this method is library authors who need access
-  # to the example currently being executed and also want to support all
-  # versions of RSpec 2 and 3.
-  #
-  # @example
-  #
-  #     RSpec.configure do |c|
-  #       # context.example is deprecated, but RSpec.current_example is not
-  #       # available until RSpec 3.0.
-  #       fetch_current_example = RSpec.respond_to?(:current_example) ?
-  #         proc { RSpec.current_example } : proc { |context| context.example }
-  #
-  #       c.before(:example) do
-  #         example = fetch_current_example.call(self)
-  #
-  #         # ...
-  #       end
-  #     end
-  #
+  # to the example currently being executed.
   def self.current_example
     RSpec::Support.thread_local_data[:current_example]
   end
@@ -137,6 +121,7 @@ module RSpec
   module Core
     autoload :ExampleStatusPersister, "rspec/core/example_status_persister"
     autoload :Profiler,               "rspec/core/profiler"
+    autoload :DidYouMean,             "rspec/core/did_you_mean"
 
     # @private
     # This avoids issues with reporting time caused by examples that
@@ -177,7 +162,4 @@ module RSpec
     require MODULES_TO_AUTOLOAD.fetch(name) { return super }
     ::RSpec.const_get(name)
   end
-
-  Core::DSL.expose_globally!
-  Core::SharedExampleGroup::TopLevelDSL.expose_globally!
 end

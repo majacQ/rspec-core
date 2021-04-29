@@ -1,4 +1,5 @@
-require 'rspec/core/project_initializer'
+require 'rspec/core/drb'
+require 'rspec/core/bisect/coordinator'
 
 module RSpec::Core
   RSpec.describe OptionParser do
@@ -32,12 +33,8 @@ module RSpec::Core
     end
 
     it "proposes you to use --help and returns an error on incorrect argument" do
-      parser = Parser.new([option = "--my_wrong_arg"])
-
-      expect(parser).to receive(:abort) do |msg|
-        expect(msg).to include('use --help', option)
-      end
-
+      parser = Parser.new(["--my_wrong_arg"])
+      expect(parser).to receive(:abort).with(a_string_including('use --help'))
       parser.parse
     end
 
@@ -57,52 +54,61 @@ module RSpec::Core
       shorts.each do |option|
         it "won't parse #{option} as a shorthand for #{long}" do
           parser = Parser.new([option])
-
-          expect(parser).to receive(:abort) do |msg|
-            expect(msg).to include('use --help', option)
-          end
-
+          expect(parser).to receive(:abort).with(a_string_including('use --help'))
           parser.parse
         end
       end
     end
 
-    it "won't display invalid options in the help output" do
-      def generate_help_text
-        parser = Parser.new(["--help"])
-        allow(parser).to receive(:exit)
-        parser.parse
+    %w[ -h --help ].each do |option|
+      it 'sets the `:runner` option with the `PrintHelp` invocation' do
+        parser = Parser.new([option])
+
+        options = parser.parse
+
+        expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::PrintHelp)
       end
-
-      useless_lines = /^\s*--?\w+\s*$\n/
-
-      expect { generate_help_text }.to_not output(useless_lines).to_stdout
     end
 
     %w[ -v --version ].each do |option|
       describe option do
-        it "prints the version and exits" do
+        it 'sets the `:runner` option with the `PrintVersion` invocation' do
           parser = Parser.new([option])
-          expect(parser).to receive(:exit)
 
-          expect {
-            parser.parse
-          }.to output("#{RSpec::Core::Version::STRING}\n").to_stdout
+          options = parser.parse
+
+          expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::PrintVersion)
         end
       end
     end
 
-    describe "--init" do
-      it "initializes a project and exits" do
-        project_init = instance_double(ProjectInitializer)
-        allow(ProjectInitializer).to receive_messages(:new => project_init)
+    %w[ -X --drb ].each do |option|
+      describe option do
+        let(:parser) { Parser.new([option]) }
 
+        it 'sets the `:drb` option to true' do
+          options = parser.parse
+
+          expect(options[:drb]).to be(true)
+        end
+
+        it 'sets the `:runner` option with the `DrbWithFallback` invocation' do
+          options = parser.parse
+
+          expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::DRbWithFallback)
+        end
+      end
+    end
+
+    describe '--init' do
+      let(:initialize_project) { double(:initialize_project) }
+
+      it 'sets the `:runner` option with the `InitializeProject` invocation' do
         parser = Parser.new(["--init"])
 
-        expect(project_init).to receive(:run).ordered
-        expect(parser).to receive(:exit).ordered
+        options = parser.parse
 
-        parser.parse
+        expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::InitializeProject)
       end
     end
 
@@ -179,22 +185,24 @@ module RSpec::Core
       end
     end
 
-    describe "--next-failure" do
-      it 'is equivalent to `--tag last_run_status:failed --fail-fast --order defined`' do
-        long_form = Parser.parse(%w[ --tag last_run_status:failed --fail-fast --order defined ])
-        next_failure = Parser.parse(%w[ --next-failure ])
+    %w[--next-failure -n].each do |option|
+      describe option do
+        it 'is equivalent to `--tag last_run_status:failed --fail-fast --order defined`' do
+          long_form = Parser.parse(%w[ --tag last_run_status:failed --fail-fast --order defined ])
+          next_failure = Parser.parse([option])
 
-        expect(next_failure).to include(long_form)
-      end
+          expect(next_failure).to include(long_form)
+        end
 
-      it 'does not force `--order defined` over a specified `--seed 1234` option that comes before it' do
-        options = Parser.parse(%w[ --seed 1234 --next-failure ])
-        expect(options).to include(:order => "rand:1234")
-      end
+        it 'does not force `--order defined` over a specified `--seed 1234` option that comes before it' do
+          options = Parser.parse(['--seed', '1234', option])
+          expect(options).to include(:order => "rand:1234")
+        end
 
-      it 'does not force `--order defined` over a specified `--seed 1234` option that comes after it' do
-        options = Parser.parse(%w[ --next-failure --seed 1234 ])
-        expect(options).to include(:order => "rand:1234")
+        it 'does not force `--order defined` over a specified `--seed 1234` option that comes after it' do
+          options = Parser.parse([option, '--seed', '1234'])
+          expect(options).to include(:order => "rand:1234")
+        end
       end
     end
 
@@ -204,6 +212,16 @@ module RSpec::Core
           options = Parser.parse([option, "this (and that)"])
           expect(options[:full_description].length).to eq(1)
           expect("this (and that)").to match(options[:full_description].first)
+        end
+      end
+    end
+
+    %w[--example-matches -E].each do |option|
+      describe option do
+        it "does not escape the arg" do
+          options = Parser.parse([option, 'this (and that)\b'])
+          expect(options[:full_description].length).to eq(1)
+          expect(/this (and that)\b/).to eq(options[:full_description].first)
         end
       end
     end
@@ -317,6 +335,22 @@ module RSpec::Core
       end
     end
 
+    describe "--bisect" do
+      it "sets the `:bisect` option" do
+        options = Parser.parse(%w[ --bisect ])
+
+        expect(options[:bisect]).to be(true)
+      end
+
+      it "sets the `:runner` option with the `Bisect` invocation" do
+        parser = Parser.new(['--bisect'])
+
+        options = parser.parse
+
+        expect(options[:runner]).to be_instance_of(RSpec::Core::Invocations::Bisect)
+      end
+    end
+
     describe '--profile' do
       it 'sets profile_examples to true by default' do
         options = Parser.parse(%w[--profile])
@@ -364,5 +398,20 @@ module RSpec::Core
       end
     end
 
+    describe '--force-color' do
+      it 'aborts if --no-color was previously set' do
+        parser = Parser.new(%w[--no-color --force-color])
+        expect(parser).to receive(:abort).with(a_string_including('only use one of `--force-color` and `--no-color`'))
+        parser.parse
+      end
+    end
+
+    describe '--no-color' do
+      it 'aborts if --force-color was previously set' do
+        parser = Parser.new(%w[--force-color --no-color])
+        expect(parser).to receive(:abort).with(a_string_including('only use one of --force-color and --no-color'))
+        parser.parse
+      end
+    end
   end
 end

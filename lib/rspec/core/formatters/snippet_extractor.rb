@@ -1,4 +1,4 @@
-RSpec::Support.require_rspec_core "source"
+RSpec::Support.require_rspec_support 'ruby_features'
 
 module RSpec
   module Core
@@ -17,7 +17,7 @@ module RSpec
 
         def self.source_from_file(path)
           raise NoSuchFileError unless File.exist?(path)
-          RSpec.world.source_cache.source_from_file(path)
+          RSpec.world.source_from_file(path)
         end
 
         if RSpec::Support::RubyFeatures.ripper_supported?
@@ -70,7 +70,7 @@ module RSpec
           end
 
           def unclosed_tokens_in_line_range(line_range)
-            tokens = FlatMap.flat_map(line_range) do |line_number|
+            tokens = line_range.flat_map do |line_number|
               source.tokens_by_line_number[line_number]
             end
 

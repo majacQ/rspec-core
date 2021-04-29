@@ -18,6 +18,64 @@ module RSpec::Core
       end
     end
 
+    [:example, :context, :suite].each do |scope|
+      describe "#before(#{scope})" do
+        it "stops running subsequent hooks of the same type when an error is encountered" do
+          sequence = []
+
+          RSpec.configure do |c|
+            c.output_stream = StringIO.new
+
+            c.before(scope) do
+              sequence << :hook_1
+              raise "boom"
+            end
+
+            c.before(scope) do
+              sequence << :hook_2
+              raise "boom"
+            end
+          end
+
+          RSpec.configuration.with_suite_hooks do
+            RSpec.describe do
+              example { sequence << :example }
+            end.run
+          end
+
+          expect(sequence).to eq [:hook_1]
+        end
+      end
+
+      describe "#after(#{scope})" do
+        it "runs subsequent hooks of the same type when an error is encountered so all cleanup can complete" do
+          sequence = []
+
+          RSpec.configure do |c|
+            c.output_stream = StringIO.new
+
+            c.after(scope) do
+              sequence << :hook_2
+              raise "boom"
+            end
+
+            c.after(scope) do
+              sequence << :hook_1
+              raise "boom"
+            end
+          end
+
+          RSpec.configuration.with_suite_hooks do
+            RSpec.describe do
+              example { sequence << :example }
+            end.run
+          end
+
+          expect(sequence).to eq [:example, :hook_1, :hook_2]
+        end
+      end
+    end
+
     [:before, :after, :around].each do |type|
       [:example, :context].each do |scope|
         next if type == :around && scope == :context
@@ -116,16 +174,6 @@ module RSpec::Core
           end
         end
 
-        if RUBY_VERSION.to_f < 1.9
-          def hook_desc(_)
-            "around hook"
-          end
-        else
-          def hook_desc(line)
-            "around hook at #{Metadata.relative_path(__FILE__)}:#{line}"
-          end
-        end
-
         it 'indicates which around hook did not run the example in the pending message' do
           ex = nil
           line = __LINE__ + 3
@@ -138,7 +186,8 @@ module RSpec::Core
           end
 
           group.run
-          expect(ex.execution_result.pending_message).to eq("#{hook_desc(line)} did not execute the example")
+          expect(ex.execution_result.pending_message)
+            .to eq("around hook at #{Metadata.relative_path(__FILE__)}:#{line} did not execute the example")
         end
       end
 
@@ -433,6 +482,33 @@ module RSpec::Core
         :prepend_before, :prepend_after,
         :hooks
       ])
+    end
+
+    it 'raises an error for `around(:context)`' do
+      expect {
+        RSpec.describe do
+          around(:context) { }
+        end
+      }.to raise_error(ArgumentError, a_string_including("`around(:context)` hooks are not supported"))
+    end
+
+    it 'raises an error for `around(:context)` defined in `configure`' do
+      expect {
+        RSpec.configure do |c|
+          c.around(:context) { }
+        end
+      }.to raise_error(ArgumentError, a_string_including("`around(:context)` hooks are not supported"))
+    end
+
+    [:before, :around, :after].each do |type|
+      it "emits a warning for `#{type}(:suite)` hooks" do
+        expect {
+          RSpec.describe do
+            send(type, :suite) { }
+          end
+        }.to raise_error(ArgumentError, a_string_including(
+          "`#{type}(:suite)` hooks are only supported on the RSpec configuration object"))
+      end
     end
   end
 end

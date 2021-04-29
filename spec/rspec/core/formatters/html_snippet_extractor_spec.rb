@@ -12,11 +12,13 @@ module RSpec
           expect(RSpec::Core::Formatters::HtmlSnippetExtractor.new.lines_around("blech", 8)).to eq("# Couldn't get snippet for blech")
         end
 
-        it "falls back on a default message when it gets a security error" do
-          message = with_safe_set_to_level_that_triggers_security_errors do
-            RSpec::Core::Formatters::HtmlSnippetExtractor.new.lines_around("blech".taint, 8)
+        if RSpec::Support::RubyFeatures.supports_taint?
+          it "falls back on a default message when it gets a security error" do
+            message = with_safe_set_to_level_that_triggers_security_errors do
+              RSpec::Core::Formatters::HtmlSnippetExtractor.new.lines_around("blech".dup.taint, 8)
+            end
+            expect(message).to eq("# Couldn't get snippet for blech")
           end
-          expect(message).to eq("# Couldn't get snippet for blech")
         end
 
         describe "snippet extraction" do
@@ -25,16 +27,15 @@ module RSpec
           end
 
           before do
-            # `send` is required for 1.8.7...
-            @orig_converter = HtmlSnippetExtractor.send(:class_variable_get, :@@converter)
+            @orig_converter = HtmlSnippetExtractor.class_variable_get(:@@converter)
           end
 
           after do
-            HtmlSnippetExtractor.send(:class_variable_set, :@@converter, @orig_converter)
+            HtmlSnippetExtractor.class_variable_set(:@@converter, @orig_converter)
           end
 
           it 'suggests you install coderay when it cannot be loaded' do
-            HtmlSnippetExtractor.send(:class_variable_set, :@@converter, HtmlSnippetExtractor::NullConverter)
+            HtmlSnippetExtractor.class_variable_set(:@@converter, HtmlSnippetExtractor::NullConverter)
 
             expect(snippet).to include("Install the coderay gem")
           end

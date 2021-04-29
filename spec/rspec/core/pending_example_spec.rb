@@ -44,7 +44,7 @@ RSpec.describe "an example" do
 
       group.run
       example = group.examples.first
-      expect(example.metadata[:pending]).to be_truthy
+      expect(example.metadata[:pending]).to be(true)
     end
   end
 
@@ -150,7 +150,7 @@ RSpec.describe "an example" do
           end
         end.run
 
-        expect(ex.description).to eq('should eq "gnirts"')
+        expect(ex.description).to eq('is expected to eq "gnirts"')
       end
     end
 
@@ -200,7 +200,7 @@ RSpec.describe "an example" do
       group.run
       expect(example).to fail_with ArgumentError
       expect(example.exception.message).to match(
-        /Passing a block within an example is now deprecated./
+        /Passing a block within an example is not supported./
       )
     end
 

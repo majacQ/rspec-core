@@ -1,5 +1,3 @@
-# encoding: utf-8
-
 module RSpec::Core
   RSpec.describe ExampleGroup do
     it_behaves_like "metadata hash builder" do
@@ -78,24 +76,11 @@ module RSpec::Core
         end
       end
 
-      if RUBY_VERSION == "1.9.2"
-        RSpec::Matchers.define :have_class_const do |class_name|
-          match do |group|
-            class_name.gsub!('::','_::')
-            class_name << '_'
-            group.name == "RSpec::ExampleGroups::#{class_name}" &&
-            group == class_name.split('::').inject(RSpec::ExampleGroups) do |mod, name|
-              mod.const_get(name)
-            end
-          end
-        end
-      else
-        RSpec::Matchers.define :have_class_const do |class_name, _|
-          match do |group|
-            group.name == "RSpec::ExampleGroups::#{class_name}" &&
-            group == class_name.split('::').inject(RSpec::ExampleGroups) do |mod, name|
-              mod.const_get(name)
-            end
+      RSpec::Matchers.define :have_class_const do |class_name, _|
+        match do |group|
+          group.name == "RSpec::ExampleGroups::#{class_name}" &&
+          group == class_name.split('::').inject(RSpec::ExampleGroups) do |mod, name|
+            mod.const_get(name)
           end
         end
       end
@@ -140,16 +125,12 @@ module RSpec::Core
         expect(child).to have_class_const("SomeParentGroup::Hash")
       end
 
-      it 'disambiguates name collisions by appending a number', :unless => RUBY_VERSION == '1.9.2' do
+      it 'disambiguates name collisions by appending a number' do
         groups = 10.times.map { RSpec.describe("Collision") }
         expect(groups[0]).to have_class_const("Collision")
         expect(groups[1]).to have_class_const("Collision_2")
         expect(groups[8]).to have_class_const("Collision_9")
-
-        if RUBY_VERSION.to_f > 1.8 && !(defined?(RUBY_ENGINE) && RUBY_ENGINE == 'rbx')
-          # on 1.8.7, rbx "Collision_9".next => "Collisioo_0"
-          expect(groups[9]).to have_class_const("Collision_10")
-        end
+        expect(groups[9]).to have_class_const("Collision_10")
       end
 
       it 'identifies unnamed groups as "Anonymous"' do
@@ -168,19 +149,9 @@ module RSpec::Core
         }.to raise_error(/ExampleGroups::CallingAnUndefinedMethod/)
       end
 
-      it "assigns the const before including shared contexts via metadata so error messages from eval'ing the context include the name" do
-        RSpec.shared_context("foo", :foo) { bar }
-
-        expect {
-          RSpec.describe("Including shared context via metadata", :foo)
-        }.to raise_error(NameError,
-          a_string_including('ExampleGroups::IncludingSharedContextViaMetadata', 'bar')
-        )
-      end
-
-      it 'does not have problems with example groups named "Core"', :unless => RUBY_VERSION == '1.9.2' do
+      it 'does not have problems with example groups named "Core"' do
         RSpec.describe("Core")
-        expect(defined?(::RSpec::ExampleGroups::Core)).to be_truthy
+        expect(defined?(::RSpec::ExampleGroups::Core)).to be
 
         # The original bug was triggered when a group was defined AFTER one named `Core`,
         # due to it not using the fully qualified `::RSpec::Core::ExampleGroup` constant.
@@ -188,9 +159,9 @@ module RSpec::Core
         expect(group).to have_class_const("AnotherGroup")
       end
 
-      it 'does not have problems with example groups named "RSpec"', :unless => RUBY_VERSION == '1.9.2' do
+      it 'does not have problems with example groups named "RSpec"' do
         RSpec.describe("RSpec")
-        expect(defined?(::RSpec::ExampleGroups::RSpec)).to be_truthy
+        expect(defined?(::RSpec::ExampleGroups::RSpec)).to be
 
         # The original bug was triggered when a group was defined AFTER one named `RSpec`,
         # due to it not using the fully qualified `::RSpec::Core::ExampleGroup` constant.
@@ -535,7 +506,7 @@ module RSpec::Core
               end
             end
 
-            expect(group.run).to be_truthy
+            expect(group.run).to be(true)
           end
         end
 
@@ -551,7 +522,7 @@ module RSpec::Core
               end
             end
 
-            expect(group.run).to be_truthy
+            expect(group.run).to be(true)
           end
         end
       end
@@ -566,7 +537,7 @@ module RSpec::Core
             end
           end
 
-          expect(group.run).to be_truthy, "expected examples in group to pass"
+          expect(group.run).to be(true), "expected examples in group to pass"
         end
 
         context "when a class is passed" do
@@ -662,7 +633,7 @@ module RSpec::Core
         let(:focused_example) { RSpec.describe.send example_alias, "a focused example" }
 
         it 'defines an example that can be filtered with :focus => true' do
-          expect(focused_example.metadata[:focus]).to be_truthy
+          expect(focused_example.metadata[:focus]).to be(true)
         end
       end
     end
@@ -778,7 +749,7 @@ module RSpec::Core
         group.example("example") {}
 
         group.run
-        expect(RSpec.world.wants_to_quit).to be_falsey
+        expect(RSpec.world.wants_to_quit).to be(false)
       end
 
       it "runs the before eachs in order" do
@@ -941,7 +912,7 @@ module RSpec::Core
         group = RSpec.describe
         group.before(:all) { raise "error in before all" }
         example = group.example("equality") { expect(1).to eq(2) }
-        expect(group.run).to be_falsey
+        expect(group.run).to be(false)
 
         expect(example.metadata).not_to be_nil
         expect(example.execution_result.exception).not_to be_nil
@@ -1013,6 +984,12 @@ module RSpec::Core
         it "still runs both after blocks" do
           self.group.run
           expect(hooks_run).to eq [:two,:one]
+        end
+
+        it "sets `world.non_example_failure` so the exit status will be non-zero" do
+          expect {
+            self.group.run
+          }.to change { RSpec.world.non_example_failure }.from(a_falsey_value).to(true)
         end
       end
     end
@@ -1161,8 +1138,8 @@ module RSpec::Core
           end
           group.run
 
-          expect(extract_execution_results(group).map(&:to_h)).to match([
-            a_hash_including(
+          expect(extract_execution_results(group)).to match([
+            have_attributes(
               :status => :pending,
               :pending_message => "Temporarily skipped with #{method_name}"
             )
@@ -1213,12 +1190,12 @@ module RSpec::Core
         end
         group.run
 
-        expect(extract_execution_results(group).map(&:to_h)).to match([
-          a_hash_including(
+        expect(extract_execution_results(group)).to match([
+          have_attributes(
             :status => :failed,
             :pending_message => "No reason given"
           ),
-          a_hash_including(
+          have_attributes(
             :status => :pending,
             :pending_message => "unimplemented"
           )
@@ -1285,7 +1262,7 @@ module RSpec::Core
           example('ex 2') { expect(1).to eq(1) }
         end
         allow(group).to receive(:filtered_examples) { group.examples }
-        expect(group.run(reporter)).to be_truthy
+        expect(group.run(reporter)).to be(true)
       end
 
       it "returns false if any of the examples fail" do
@@ -1294,7 +1271,7 @@ module RSpec::Core
           example('ex 2') { expect(1).to eq(2) }
         end
         allow(group).to receive(:filtered_examples) { group.examples }
-        expect(group.run(reporter)).to be_falsey
+        expect(group.run(reporter)).to be(false)
       end
 
       it "runs all examples, regardless of any of them failing" do
@@ -1306,7 +1283,7 @@ module RSpec::Core
         group.filtered_examples.each do |example|
           expect(example).to receive(:run)
         end
-        expect(group.run(reporter)).to be_falsey
+        expect(group.run(reporter)).to be(false)
       end
     end
 
@@ -1327,11 +1304,7 @@ module RSpec::Core
         expect(@before_all_top_level).to eq('before_all_top_level')
       end
 
-      it "can access the before all ivars in the before_all_ivars hash", :ruby => 1.8 do |ex|
-        expect(ex.example_group.before_context_ivars).to include('@before_all_top_level' => 'before_all_top_level')
-      end
-
-      it "can access the before all ivars in the before_all_ivars hash", :ruby => 1.9 do |ex|
+      it "can access the before all ivars in the before_all_ivars hash" do |ex|
         expect(ex.example_group.before_context_ivars).to include(:@before_all_top_level => 'before_all_top_level')
       end
 
@@ -1360,12 +1333,12 @@ module RSpec::Core
     describe "ivars are not shared across examples" do
       it "(first example)" do
         @a = 1
-        expect(defined?(@b)).to be_falsey
+        expect(defined?(@b)).to be(nil)
       end
 
       it "(second example)" do
         @b = 2
-        expect(defined?(@a)).to be_falsey
+        expect(defined?(@a)).to be(nil)
       end
     end
 
@@ -1421,8 +1394,8 @@ module RSpec::Core
         it "sets RSpec.world.wants_to_quit flag if encountering an exception in before(:all)" do
           group().before(:all) { raise "error in before all" }
           group().example("equality") { expect(1).to eq(2) }
-          expect(group().run(reporter)).to be_falsey
-          expect(RSpec.world.wants_to_quit).to be_truthy
+          expect(group().run(reporter)).to be(false)
+          expect(RSpec.world.wants_to_quit).to be(true)
         end
       end
 
@@ -1451,7 +1424,7 @@ module RSpec::Core
 
           expect(group().run(reporter)).to be false
 
-          expect(RSpec.world.wants_to_quit).to be_falsey
+          expect(RSpec.world.wants_to_quit).to be(false)
         end
 
         it "sets RSpec.world.wants_to_quit flag if encountering an exception in before(:all) causing at least 3 failures" do
@@ -1494,7 +1467,7 @@ module RSpec::Core
             end
           end
 
-          expect(group.run(reporter)).to be_truthy
+          expect(group.run(reporter)).to be(true)
         end
       end
 
@@ -1511,7 +1484,7 @@ module RSpec::Core
             end
           end
 
-          expect(group.run(reporter)).to be_falsey
+          expect(group.run(reporter)).to be(false)
         end
       end
 
@@ -1528,7 +1501,7 @@ module RSpec::Core
             end
           end
 
-          expect(group.run(reporter)).to be_falsey
+          expect(group.run(reporter)).to be(false)
         end
       end
     end
@@ -1542,12 +1515,24 @@ module RSpec::Core
         expect(group.metadata).to include(:foo => 1, :bar => 2)
       end
 
-      it "does not overwrite existing metadata since group metadata takes precedence over inherited metadata" do
+      it "does not overwrite existing metadata originating from that level" do
         group = RSpec.describe("group", :foo => 1)
 
         expect {
           group.update_inherited_metadata(:foo => 2)
         }.not_to change { group.metadata[:foo] }.from(1)
+      end
+
+      it "overwrites metadata originating from a parent" do
+        group = nil
+        RSpec.describe("group", :foo => 1) do
+          group = context do
+          end
+        end
+
+        expect {
+          group.update_inherited_metadata(:foo => 2)
+        }.to change { group.metadata[:foo] }.from(1).to(2)
       end
 
       it "does not replace the existing metadata object with a new one or change its default proc" do
@@ -1662,6 +1647,16 @@ module RSpec::Core
           end.to raise_error(ArgumentError, /Could not find .* "shared stuff"/)
         end
 
+        it "raises a helpful error message when shared content is accessed recursively" do
+          self.group.shared_examples "named otherwise" do
+            example("does something") {}
+            self.send(name, "named otherwise")
+          end
+          expect do
+            self.group.send(name, "named otherwise")
+          end.to raise_error(ArgumentError, /can't include shared examples recursively/)
+        end
+
         it "leaves RSpec's thread metadata unchanged" do
           expect {
             self.group.send(name, "named this")
@@ -1723,16 +1718,16 @@ module RSpec::Core
               def foo; "bar"; end
             end
           end
-          expect(group.run).to be_truthy
+          expect(group.run).to be(true)
         end
       end
     end
 
-    describe "#it_should_behave_like" do
+    describe "#it_behaves_like" do
       it "creates a nested group" do
         group = RSpec.describe('fake group')
         group.shared_examples_for("thing") {}
-        group.it_should_behave_like("thing")
+        group.it_behaves_like("thing")
         expect(group.children.count).to eq(1)
       end
 
@@ -1740,7 +1735,7 @@ module RSpec::Core
         klass = Class.new
         group = RSpec.describe('fake group')
         group.shared_examples_for(klass) {}
-        group.it_should_behave_like(klass)
+        group.it_behaves_like(klass)
         expect(group.children.count).to eq(1)
       end
 
@@ -1749,7 +1744,7 @@ module RSpec::Core
         group.shared_examples_for("thing") do
           it("does something")
         end
-        shared_group = group.it_should_behave_like("thing")
+        shared_group = group.it_behaves_like("thing")
         expect(shared_group.examples.count).to eq(1)
       end
 
@@ -1758,7 +1753,7 @@ module RSpec::Core
         group.shared_examples_for("thing") do
           def foo; end
         end
-        shared_group = group.it_should_behave_like("thing")
+        shared_group = group.it_behaves_like("thing")
         expect(shared_group.public_instance_methods.map{|m| m.to_s}).to include("foo")
       end
 
@@ -1767,7 +1762,7 @@ module RSpec::Core
         group.shared_examples_for("thing") do
           def self.foo; end
         end
-        shared_group = group.it_should_behave_like("thing")
+        shared_group = group.it_behaves_like("thing")
         expect(shared_group.methods.map{|m| m.to_s}).to include("foo")
       end
 
@@ -1782,7 +1777,7 @@ module RSpec::Core
             end
           end
 
-          it_should_behave_like "thing", :value1, :value2
+          it_behaves_like "thing", :value1, :value2
         end
 
         group.run
@@ -1795,7 +1790,7 @@ module RSpec::Core
         group.shared_examples_for("thing") do |param1|
           def foo; end
         end
-        shared_group = group.it_should_behave_like("thing", :a)
+        shared_group = group.it_behaves_like("thing", :a)
         expect(shared_group.public_instance_methods.map{|m| m.to_s}).to include("foo")
       end
 
@@ -1803,7 +1798,7 @@ module RSpec::Core
         eval_count = 0
         group = RSpec.describe('fake group')
         group.shared_examples_for("thing") { |p| eval_count += 1 }
-        group.it_should_behave_like("thing", :a)
+        group.it_behaves_like("thing", :a)
         expect(eval_count).to eq(1)
       end
 
@@ -1816,7 +1811,7 @@ module RSpec::Core
                 scopes << self.class
               end
             end
-            it_should_behave_like "thing" do
+            it_behaves_like "thing" do
               it("gets run in the same nested group") do
                 scopes << self.class
               end
@@ -1831,7 +1826,7 @@ module RSpec::Core
       it "raises a helpful error message when shared context is not found" do
         expect do
           RSpec.describe do
-            it_should_behave_like "shared stuff"
+            it_behaves_like "shared stuff"
           end
         end.to raise_error(ArgumentError,%q|Could not find shared examples "shared stuff"|)
       end
@@ -1840,7 +1835,7 @@ module RSpec::Core
         expect {
           RSpec.describe do
             shared_examples_for("stuff") { }
-            it_should_behave_like "stuff"
+            it_behaves_like "stuff"
           end
         }.to avoid_changing(RSpec::Support, :thread_local_data)
       end
@@ -1849,7 +1844,7 @@ module RSpec::Core
         expect {
           RSpec.describe do
             shared_examples_for("stuff") { }
-            it_should_behave_like "stuff" do
+            it_behaves_like "stuff" do
               raise "boom"
             end
           end
@@ -1868,7 +1863,7 @@ module RSpec::Core
       # for users. RSpec internals should not add methods here, though.
       expect(rspec_core_methods.map(&:to_sym)).to contain_exactly(
         :described_class, :subject,
-        :is_expected, :should, :should_not,
+        :is_expected,
         :pending, :skip,
         :setup_mocks_for_rspec, :teardown_mocks_for_rspec, :verify_mocks_for_rspec
       )
@@ -1891,7 +1886,7 @@ module RSpec::Core
       }.to raise_error(/not allowed/)
     end
 
-    describe 'inspect output', :unless => RUBY_VERSION == '1.9.2' do
+    describe 'inspect output' do
       context 'when there is no inspect output provided' do
         it "uses '(no description provided)' instead" do
           expect(ExampleGroup.new.inspect).to eq('#<RSpec::Core::ExampleGroup (no description provided)>')

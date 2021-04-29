@@ -32,11 +32,11 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
     end
   end
 
-  describe "#rerun_argument" do
+  describe "#location_rerun_argument" do
     it "returns the location-based rerun argument" do
       allow(RSpec.configuration).to receive_messages(:loaded_spec_files => [__FILE__])
       example = RSpec.describe.example
-      expect(example.rerun_argument).to eq("#{RSpec::Core::Metadata.relative_path(__FILE__)}:#{__LINE__ - 1}")
+      expect(example.location_rerun_argument).to eq("#{RSpec::Core::Metadata.relative_path(__FILE__)}:#{__LINE__ - 1}")
     end
   end
 
@@ -84,13 +84,17 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
 
   describe '#duplicate_with' do
     it 'successfully duplicates an example' do
-      example = example_group.example { raise 'first' }
+      error_string = 'first'
+      example = example_group.example { raise error_string }
       example2 = example.duplicate_with({ :custom_key => :custom_value })
 
       # ensure metadata is unique for each example
       expect(example.metadata.object_id).to_not eq(example2.metadata.object_id)
       expect(example.metadata[:custom_key]).to eq(nil)
+      expect(&example.metadata[:block]).to raise_error(error_string)
+
       expect(example2.metadata[:custom_key]).to eq(:custom_value)
+      expect(&example2.metadata[:block]).to raise_error(error_string)
 
       # cloned examples must have unique ids
       expect(example.id).to_not eq(example2.id)
@@ -183,13 +187,13 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
       it "uses the matcher-generated description" do
         example_group.example { expect(5).to eq(5) }
         example_group.run
-        expect(example_group.examples.first.description).to eq("should eq 5")
+        expect(example_group.examples.first.description).to eq("is expected to eq 5")
       end
 
       it "uses the matcher-generated description in the full description" do
         example_group.example { expect(5).to eq(5) }
         example_group.run
-        expect(example_group.examples.first.full_description).to eq("group description should eq 5")
+        expect(example_group.examples.first.full_description).to eq("group description is expected to eq 5")
       end
 
       it "uses the file and line number if there is no matcher-generated description" do
@@ -209,7 +213,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         it "still uses the matcher-generated description if a matcher ran" do
           example = example_group.example { pending; expect(4).to eq(5) }
           example_group.run
-          expect(example.description).to eq("should eq 5")
+          expect(example.description).to eq("is expected to eq 5")
         end
 
         it "uses the file and line number of the example if no matcher ran" do
@@ -228,7 +232,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
             after { raise "boom" }
           end.run
 
-          expect(ex.description).to eq("should eq 2")
+          expect(ex.description).to eq("is expected to eq 2")
         end
       end
 
@@ -264,7 +268,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
             after { expect(true).to eq(true) }
           end.run
 
-          expect(ex).to pass.and have_attributes(:description => "should be nil")
+          expect(ex).to pass.and have_attributes(:description => "is expected to be nil")
         end
       end
     end
@@ -275,7 +279,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
       it "uses the matcher-generated description" do
         example_group.example { expect(5).to eq(5) }
         example_group.run
-        expect(example_group.examples.first.description).to eq("should eq 5")
+        expect(example_group.examples.first.description).to eq("is expected to eq 5")
       end
 
       it "uses the file and line number if there is no matcher-generated description" do
@@ -367,7 +371,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         example('example') { expect(1).to eq(1) }
       end
       group.run
-      expect(after_run).to be_truthy, "expected after(:each) to be run"
+      expect(after_run).to be(true), "expected after(:each) to be run"
     end
 
     it "runs after(:each) when the example fails" do
@@ -377,7 +381,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         example('example') { expect(1).to eq(2) }
       end
       group.run
-      expect(after_run).to be_truthy, "expected after(:each) to be run"
+      expect(after_run).to be(true), "expected after(:each) to be run"
     end
 
     it "runs after(:each) when the example raises an Exception" do
@@ -387,7 +391,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         example('example') { raise "this error" }
       end
       group.run
-      expect(after_run).to be_truthy, "expected after(:each) to be run"
+      expect(after_run).to be(true), "expected after(:each) to be run"
     end
 
     context "with an after(:each) that raises" do
@@ -399,7 +403,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
           example('example') { expect(1).to eq(1) }
         end
         group.run
-        expect(after_run).to be_truthy, "expected after(:each) to be run"
+        expect(after_run).to be(true), "expected after(:each) to be run"
       end
 
       it "stores the exception" do
@@ -439,7 +443,9 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
 
     context 'memory leaks, see GH-321, GH-1921' do
       def self.reliable_gc
-        0 != GC.method(:start).arity # older Rubies don't give us options to ensure a full GC
+        # older Rubies don't give us options to ensure a full GC
+        # TruffleRuby GC.start arity matches but GC.disable and GC.enable are mock implementations
+        0 != GC.method(:start).arity && !(defined?(RUBY_ENGINE) && RUBY_ENGINE == "truffleruby")
       end
 
       def expect_gc(opts)
@@ -463,7 +469,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         expect(get_all.call).to eq opts.fetch(:post_gc)
       end
 
-      it 'releases references to the examples / their ivars', :if => reliable_gc do
+      it 'releases references to the examples / their ivars', :skip => !reliable_gc do
         config        = RSpec::Core::Configuration.new
         real_reporter = RSpec::Core::Reporter.new(config) # in case it is the cause of a leak
         garbage       = Struct.new :defined_in
@@ -499,7 +505,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
       end
     end
 
-    it "leaves raised exceptions unmodified (GH-1103)" do
+    it "leaves raised exceptions unmodified (GH-1103)", :skip => RUBY_VERSION >= '2.5' do
       # set the backtrace, otherwise MRI will build a whole new object,
       # and thus mess with our expectations. Rubinius and JRuby are not
       # affected.
@@ -552,6 +558,103 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         group.run
         expect(executed).to eq([])
       end
+    end
+  end
+
+  describe "reporting example_finished" do
+    let(:reporter) { RSpec::Core::Reporter.new(RSpec::Core::Configuration.new) }
+
+    def capture_reported_execution_result_for_example(&block)
+      reporter = RSpec::Core::Reporter.new(RSpec::Core::Configuration.new)
+
+      reported_execution_result = nil
+
+      listener = double("Listener")
+      allow(listener).to receive(:example_finished) do |notification|
+        reported_execution_result = notification.example.execution_result.dup
+      end
+
+      reporter.register_listener(listener, :example_finished)
+
+      RSpec.describe(&block).run(reporter)
+
+      reported_execution_result
+    end
+
+    shared_examples "when skipped or failed" do
+      it "fills in the execution result details before reporting a failed example as finished" do
+        execution_result = capture_reported_execution_result_for_example do
+          expect(1).to eq 2
+        end
+
+        expect(execution_result).to have_attributes(
+          :status => :failed,
+          :exception => RSpec::Expectations::ExpectationNotMetError,
+          :finished_at => a_value_within(1).of(Time.now),
+          :run_time => a_value >= 0
+        )
+      end
+
+      it "fills in the execution result details before reporting a skipped example as finished" do
+        execution_result = capture_reported_execution_result_for_example do
+          skip "because"
+          expect(1).to eq 2
+        end
+
+        expect(execution_result).to have_attributes(
+          :status => :pending,
+          :pending_message => "because",
+          :finished_at => a_value_within(1).of(Time.now),
+          :run_time => a_value >= 0
+        )
+      end
+    end
+
+    context "from an example" do
+      def capture_reported_execution_result_for_example(&block)
+        super { it(&block) }
+      end
+
+      it "fills in the execution result details before reporting a passed example as finished" do
+        execution_result = capture_reported_execution_result_for_example do
+          expect(1).to eq 1
+        end
+
+        expect(execution_result).to have_attributes(
+          :status => :passed,
+          :exception => nil,
+          :finished_at => a_value_within(1).of(Time.now),
+          :run_time => a_value >= 0
+        )
+      end
+
+      it "fills in the execution result details before reporting a pending example as finished" do
+        execution_result = capture_reported_execution_result_for_example do
+          pending "because"
+          expect(1).to eq 2
+        end
+
+        expect(execution_result).to have_attributes(
+          :status => :pending,
+          :pending_message => "because",
+          :pending_exception => RSpec::Expectations::ExpectationNotMetError,
+          :finished_at => a_value_within(1).of(Time.now),
+          :run_time => a_value >= 0
+        )
+      end
+
+      include_examples "when skipped or failed"
+    end
+
+    context "from a context hook" do
+      def capture_reported_execution_result_for_example(&block)
+        super do
+          before(:context, &block)
+          it { will_never_run }
+        end
+      end
+
+      include_examples "when skipped or failed"
     end
   end
 
@@ -641,7 +744,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         group.run
         expect(example).to fail_with ArgumentError
         expect(example.exception.message).to match(
-          /Passing a block within an example is now deprecated./
+          /Passing a block within an example is not supported./
         )
       end
     end
@@ -675,7 +778,18 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         expect_pending_result(group.examples.last)
       end
     end
+  end
 
+  describe "#pending?" do
+    it "only returns true / false values" do
+      group = describe_successfully do
+        example("", :pending => "a message thats ignored") { fail }
+        example { }
+      end
+
+      expect(group.examples[0].pending?).to eq true
+      expect(group.examples[1].pending?).to eq false
+    end
   end
 
   describe "#skip" do
@@ -741,6 +855,18 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         end
         expect(group.examples.first).to be_skipped
       end
+    end
+  end
+
+  describe "#skipped?" do
+    it "only returns true / false values" do
+      group = describe_successfully do
+        example("", :skip => "a message thats ignored") { fail }
+        example { }
+      end
+
+      expect(group.examples[0].skipped?).to eq true
+      expect(group.examples[1].skipped?).to eq false
     end
   end
 

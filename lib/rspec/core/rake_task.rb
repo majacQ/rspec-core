@@ -24,14 +24,11 @@ module RSpec
       # Default path to the RSpec executable.
       DEFAULT_RSPEC_PATH = File.expand_path('../../../../exe/rspec', __FILE__)
 
-      # Default pattern for spec files.
-      DEFAULT_PATTERN = 'spec/**{,/*/**}/*_spec.rb'
-
       # Name of task. Defaults to `:spec`.
       attr_accessor :name
 
       # Files matching this pattern will be loaded.
-      # Defaults to `'spec/**{,/*/**}/*_spec.rb'`.
+      # Defaults to `nil`.
       attr_accessor :pattern
 
       # Files matching this pattern will be excluded.
@@ -44,6 +41,21 @@ module RSpec
 
       # A message to print to stderr when there are failures.
       attr_accessor :failure_message
+
+      if Support::Ruby.jruby?
+        # Run RSpec with a clean (empty) environment is not supported
+        def with_clean_environment=(_value)
+          raise ArgumentError, "Running in a clean environment is not supported on JRuby"
+        end
+
+        # Run RSpec with a clean (empty) environment is not supported
+        def with_clean_environment
+          false
+        end
+      else
+        # Run RSpec with a clean (empty) environment.
+        attr_accessor :with_clean_environment
+      end
 
       # Use verbose output. If this is set to true, the task will print the
       # executed spec command to stdout. Defaults to `true`.
@@ -66,7 +78,7 @@ module RSpec
         @verbose       = true
         @fail_on_error = true
         @rspec_path    = DEFAULT_RSPEC_PATH
-        @pattern       = DEFAULT_PATTERN
+        @pattern       = nil
 
         define(args, &task_block)
       end
@@ -76,7 +88,12 @@ module RSpec
         command = spec_command
         puts command if verbose
 
-        return if system(command)
+        if with_clean_environment
+          return if system({}, command, :unsetenv_others => true)
+        else
+          return if system(command)
+        end
+
         puts failure_message if failure_message
 
         return unless fail_on_error
@@ -102,7 +119,10 @@ module RSpec
         if ENV['SPEC']
           FileList[ENV['SPEC']].sort
         elsif String === pattern && !File.exist?(pattern)
+          return if [*rspec_opts].any? { |opt| opt =~ /--pattern/ }
           "--pattern #{escape pattern}"
+        elsif pattern.nil?
+          ""
         else
           # Before RSpec 3.1, we used `FileList` to get the list of matched
           # files, and then pass that along to the `rspec` command. Starting

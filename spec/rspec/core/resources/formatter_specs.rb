@@ -26,11 +26,20 @@ RSpec.describe "passing spec" do
   it "passes" do
     expect(1).to eq(1)
   end
+
+  it 'passes with a multiple
+     line description' do
+  end
 end
 
 RSpec.describe "failing spec" do
   it "fails" do
     expect(1).to eq(2)
+  end
+
+  it "fails twice", :aggregate_failures do
+    expect(1).to eq(2)
+    expect(3).to eq(4)
   end
 end
 
@@ -47,12 +56,6 @@ RSpec.describe "a failing spec with odd backtraces" do
     def e.backtrace
       ["/foo.html.erb:1:in `<main>': foo (RuntimeError)",
         "   from /lib/ruby/1.9.1/erb.rb:753:in `eval'"]
-    end
-
-    def e.message
-      # Redefining message steps around this behaviour
-      # on JRuby: http://jira.codehaus.org/browse/JRUBY-5637
-      self.class.name
     end
 
     raise e

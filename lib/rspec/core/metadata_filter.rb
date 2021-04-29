@@ -8,38 +8,23 @@ module RSpec
     module MetadataFilter
       class << self
         # @private
-        def apply?(predicate, filters, metadata)
-          filters.__send__(predicate) { |k, v| filter_applies?(k, v, metadata) }
+        def apply?(filters, metadata)
+          filters.all? { |k, v| filter_applies?(k, v, metadata) }
         end
 
         # @private
-        def filter_applies?(key, value, metadata)
-          silence_metadata_example_group_deprecations do
-            return location_filter_applies?(value, metadata) if key == :locations
-            return id_filter_applies?(value, metadata)       if key == :ids
-            return filters_apply?(key, value, metadata)      if Hash === value
+        def filter_applies?(key, filter_value, metadata)
+          return location_filter_applies?(filter_value, metadata) if key == :locations
+          return id_filter_applies?(filter_value, metadata)       if key == :ids
+          return filters_apply?(key, filter_value, metadata)      if Hash === filter_value
 
-            return false unless metadata.key?(key)
-            return true if TrueClass === value && !!metadata[key]
-            return filter_applies_to_any_value?(key, value, metadata) if Array === metadata[key] && !(Proc === value)
+          meta_value = metadata.fetch(key) { return false }
 
-            case value
-            when Regexp
-              metadata[key] =~ value
-            when Proc
-              proc_filter_applies?(key, value, metadata)
-            else
-              metadata[key].to_s == value.to_s
-            end
-          end
-        end
+          return true if TrueClass === filter_value && meta_value
+          return proc_filter_applies?(key, filter_value, metadata) if Proc === filter_value
+          return filter_applies_to_any_value?(key, filter_value, metadata) if Array === meta_value
 
-        # @private
-        def silence_metadata_example_group_deprecations
-          RSpec::Support.thread_local_data[:silence_metadata_example_group_deprecations] = true
-          yield
-        ensure
-          RSpec::Support.thread_local_data.delete(:silence_metadata_example_group_deprecations)
+          filter_value === meta_value || filter_value.to_s == meta_value.to_s
         end
 
       private
@@ -77,7 +62,7 @@ module RSpec
 
         def filters_apply?(key, value, metadata)
           subhash = metadata[key]
-          return false unless Hash === subhash || HashImitatable === subhash
+          return false unless Hash === subhash
           value.all? { |k, v| filter_applies?(k, v, subhash) }
         end
       end
@@ -103,8 +88,7 @@ module RSpec
       class UpdateOptimized
         attr_reader :items_and_filters
 
-        def initialize(applies_predicate)
-          @applies_predicate = applies_predicate
+        def initialize
           @items_and_filters = []
         end
 
@@ -116,24 +100,15 @@ module RSpec
           @items_and_filters.unshift [item, metadata]
         end
 
+        def delete(item, metadata)
+          @items_and_filters.delete [item, metadata]
+        end
+
         def items_for(request_meta)
           @items_and_filters.each_with_object([]) do |(item, item_meta), to_return|
             to_return << item if item_meta.empty? ||
-                                 MetadataFilter.apply?(@applies_predicate, item_meta, request_meta)
+                                 MetadataFilter.apply?(item_meta, request_meta)
           end
-        end
-
-        unless [].respond_to?(:each_with_object) # For 1.8.7
-          # :nocov:
-          undef items_for
-          def items_for(request_meta)
-            @items_and_filters.inject([]) do |to_return, (item, item_meta)|
-              to_return << item if item_meta.empty? ||
-                                   MetadataFilter.apply?(@applies_predicate, item_meta, request_meta)
-              to_return
-            end
-          end
-          # :nocov:
         end
       end
 
@@ -153,7 +128,7 @@ module RSpec
         alias find_items_for items_for
         private :find_items_for
 
-        def initialize(applies_predicate)
+        def initialize
           super
           @applicable_keys   = Set.new
           @proc_keys         = Set.new
@@ -170,6 +145,11 @@ module RSpec
         def prepend(item, metadata)
           super
           handle_mutation(metadata)
+        end
+
+        def delete(item, metadata)
+          super
+          reconstruct_caches
         end
 
         def items_for(metadata)
@@ -196,27 +176,24 @@ module RSpec
 
       private
 
+        def reconstruct_caches
+          @applicable_keys.clear
+          @proc_keys.clear
+          @items_and_filters.each do |_item, metadata|
+            handle_mutation(metadata)
+          end
+        end
+
         def handle_mutation(metadata)
           @applicable_keys.merge(metadata.keys)
           @proc_keys.merge(proc_keys_from metadata)
           @memoized_lookups.clear
         end
 
+        # Ruby 2.3 and 2.4 do not have `Hash#slice`
         def applicable_metadata_from(metadata)
-          MetadataFilter.silence_metadata_example_group_deprecations do
-            @applicable_keys.inject({}) do |hash, key|
-              # :example_group is treated special here because...
-              # - In RSpec 2, example groups had an `:example_group` key
-              # - In RSpec 3, that key is deprecated (it was confusing!).
-              # - The key is not technically present in an example group metadata hash
-              #   (and thus would fail the `metadata.key?(key)` check) but a value
-              #   is provided when accessed via the hash's `default_proc`
-              # - Thus, for backwards compatibility, we have to explicitly check
-              #   for `:example_group` here if it is one of the keys being used to
-              #   filter.
-              hash[key] = metadata[key] if metadata.key?(key) || key == :example_group
-              hash
-            end
+          @applicable_keys.each_with_object({}) do |key, hash|
+            hash[key] = metadata[key] if metadata.key?(key)
           end
         end
 
@@ -224,18 +201,6 @@ module RSpec
           metadata.each_with_object([]) do |(key, value), to_return|
             to_return << key if Proc === value
           end
-        end
-
-        unless [].respond_to?(:each_with_object) # For 1.8.7
-          # :nocov:
-          undef proc_keys_from
-          def proc_keys_from(metadata)
-            metadata.inject([]) do |to_return, (key, value)|
-              to_return << key if Proc === value
-              to_return
-            end
-          end
-          # :nocov:
         end
       end
     end

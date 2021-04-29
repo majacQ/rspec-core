@@ -38,11 +38,11 @@
   - exclusion_filters.feature
   - if_and_unless.feature
   - filter_run_when_matching.feature
-  - run_all_when_everything_filtered.feature
 - configuration:
   - read_options_from_file.feature
   - color.feature
   - fail_fast.feature
+  - fail_if_no_examples.feature
   - custom_settings.feature
   - alias_example_to.feature
   - default_path.feature

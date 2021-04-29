@@ -1,4 +1,5 @@
 RSpec::Support.require_rspec_support "directory_maker"
+
 # ## Built-in Formatters
 #
 # * progress (default) - Prints dots for passing examples, `F` for failures, `*`
@@ -24,7 +25,7 @@ RSpec::Support.require_rspec_support "directory_maker"
 # ## Custom Formatters
 #
 # You can tell RSpec to use a custom formatter by passing its path and name to
-# the `rspec` commmand. For example, if you define MyCustomFormatter in
+# the `rspec` command. For example, if you define MyCustomFormatter in
 # path/to/my_custom_formatter.rb, you would type this command:
 #
 #     rspec --require path/to/my_custom_formatter.rb --format MyCustomFormatter
@@ -72,8 +73,9 @@ module RSpec::Core::Formatters
   autoload :ProgressFormatter,        'rspec/core/formatters/progress_formatter'
   autoload :ProfileFormatter,         'rspec/core/formatters/profile_formatter'
   autoload :JsonFormatter,            'rspec/core/formatters/json_formatter'
-  autoload :BisectFormatter,          'rspec/core/formatters/bisect_formatter'
+  autoload :BisectDRbFormatter,       'rspec/core/formatters/bisect_drb_formatter'
   autoload :ExceptionPresenter,       'rspec/core/formatters/exception_presenter'
+  autoload :FailureListFormatter,     'rspec/core/formatters/failure_list_formatter'
 
   # Register the formatter class
   # @param formatter_class [Class] formatter class to register
@@ -116,6 +118,11 @@ module RSpec::Core::Formatters
     attr_accessor :default_formatter
 
     # @private
+    def prepare_default(output_stream, deprecation_stream)
+      reporter.prepare_default(self, output_stream, deprecation_stream)
+    end
+
+    # @private
     def setup_default(output_stream, deprecation_stream)
       add default_formatter, output_stream if @formatters.empty?
 
@@ -128,9 +135,6 @@ module RSpec::Core::Formatters
       end
 
       return unless RSpec.configuration.profile_examples?
-
-      @reporter.setup_profiler
-
       return if existing_formatter_implements?(:dump_profile)
 
       add RSpec::Core::Formatters::ProfileFormatter, output_stream
@@ -138,9 +142,16 @@ module RSpec::Core::Formatters
 
     # @private
     def add(formatter_to_use, *paths)
+      # If a formatter instance was passed, we can register it directly,
+      # with no need for any of the further processing that happens below.
+      if Loader.formatters.key?(formatter_to_use.class)
+        register formatter_to_use, notifications_for(formatter_to_use.class)
+        return
+      end
+
       formatter_class = find_formatter(formatter_to_use)
 
-      args = paths.map { |p| p.respond_to?(:puts) ? p : file_at(p) }
+      args = paths.map { |p| p.respond_to?(:puts) ? p : open_stream(p) }
 
       if !Loader.formatters[formatter_class].nil?
         formatter = formatter_class.new(*args)
@@ -149,19 +160,15 @@ module RSpec::Core::Formatters
         formatter = RSpec::LegacyFormatters.load_formatter formatter_class, *args
         register formatter, formatter.notifications
       else
-        call_site = "Formatter added at: #{::RSpec::CallerFilter.first_non_rspec_line}"
-
-        RSpec.warn_deprecation <<-WARNING.gsub(/\s*\|/, ' ')
+        raise ArgumentError, <<-ERROR.gsub(/\s*\|/, ' ')
           |The #{formatter_class} formatter uses the deprecated formatter
-          |interface not supported directly by RSpec 3.
+          |interface not supported directly by RSpec 4.
           |
           |To continue to use this formatter you must install the
           |`rspec-legacy_formatters` gem, which provides support
           |for legacy formatters or upgrade the formatter to a
           |compatible version.
-          |
-          |#{call_site}
-        WARNING
+        ERROR
       end
     end
 
@@ -201,8 +208,10 @@ module RSpec::Core::Formatters
         ProgressFormatter
       when 'j', 'json'
         JsonFormatter
-      when 'bisect'
-        BisectFormatter
+      when 'bisect-drb'
+        BisectDRbFormatter
+      when 'f', 'failures'
+        FailureListFormatter
       end
     end
 
@@ -247,9 +256,14 @@ module RSpec::Core::Formatters
       word
     end
 
-    def file_at(path)
-      RSpec::Support::DirectoryMaker.mkdir_p(File.dirname(path))
-      File.new(path, 'w')
+    def open_stream(path_or_wrapper)
+      if RSpec::Core::OutputWrapper === path_or_wrapper
+        path_or_wrapper.output = open_stream(path_or_wrapper.output)
+        path_or_wrapper
+      else
+        RSpec::Support::DirectoryMaker.mkdir_p(File.dirname(path_or_wrapper))
+        File.new(path_or_wrapper, 'w')
+      end
     end
   end
 end

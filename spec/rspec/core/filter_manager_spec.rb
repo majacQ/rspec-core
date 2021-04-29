@@ -292,15 +292,15 @@ module RSpec::Core
       end
 
       context "with multiple inclusion filters" do
-        it 'includes objects that match any of them' do
+        it 'includes objects that match all of them' do
           examples = [
-            included_1 = example_with(:foo => true),
-            included_2 = example_with(:bar => true),
-                         example_with(:bazz => true)
+            included = example_with(:foo => true, :bar => true),
+                       example_with(:foo => true),
+                       example_with(:baz => true)
           ]
 
           filter_manager.include :foo => true, :bar => true
-          expect(prune(examples)).to contain_exactly(included_1, included_2)
+          expect(prune(examples)).to contain_exactly(included)
         end
       end
 
@@ -378,7 +378,7 @@ module RSpec::Core
       it 'cleans up the description' do
         project_dir = File.expand_path('.')
         expect(lambda { }.inspect).to include(project_dir)
-        expect(lambda { }.inspect).to include(' (lambda)') if RUBY_VERSION > '1.9'
+        expect(lambda { }.inspect).to include(' (lambda)')
         expect(lambda { }.inspect).to include('0x')
 
         filter_manager.include :foo => lambda { }
@@ -395,7 +395,7 @@ module RSpec::Core
       it 'cleans up the description' do
         project_dir = File.expand_path('.')
         expect(lambda { }.inspect).to include(project_dir)
-        expect(lambda { }.inspect).to include(' (lambda)') if RUBY_VERSION > '1.9'
+        expect(lambda { }.inspect).to include(' (lambda)')
         expect(lambda { }.inspect).to include('0x')
 
         filter_manager.exclude :foo => lambda { }
@@ -413,77 +413,22 @@ module RSpec::Core
         filter_manager.exclude :foo => :bar
         expect(description).to eq({ :foo => :bar }.inspect)
       end
-
-      it 'includes an overriden :if filter' do
-        allow(RSpec).to receive(:deprecate)
-        filter_manager.exclude :if => :custom_filter
-        expect(description).to eq({ :if => :custom_filter }.inspect)
-      end
-
-      it 'includes an overriden :unless filter' do
-        allow(RSpec).to receive(:deprecate)
-        filter_manager.exclude :unless => :custom_filter
-        expect(description).to eq({ :unless => :custom_filter }.inspect)
-      end
     end
 
-    describe ":if and :unless ExclusionFilters" do
-      def example_with_metadata(metadata)
-        value = nil
-        RSpec.describe("group") do
-          value = example('arbitrary example', metadata)
-        end
-        value
-      end
-
-      def exclude?(example)
+    describe ":if and :unless" do
+      def exclude_example_with_metadata?(metadata)
+        group = RSpec.describe("group")
+        example = group.example('arbitrary example', metadata)
         prune([example]).empty?
       end
 
-      describe "the default :if filter" do
-        it "does not exclude a spec with  { :if => true } metadata" do
-          example = example_with_metadata(:if => true)
-          expect(exclude?(example)).to be_falsey
-        end
-
-        it "excludes a spec with  { :if => false } metadata" do
-          example = example_with_metadata(:if => false)
-          expect(exclude?(example)).to be_truthy
-        end
-
-        it "excludes a spec with  { :if => nil } metadata" do
-          example = example_with_metadata(:if => nil)
-          expect(exclude?(example)).to be_truthy
-        end
-
-        it "continues to be an exclusion even if exclusions are cleared" do
-          example = example_with_metadata(:if => false)
-          filter_manager.exclusions.clear
-          expect(exclude?(example)).to be_truthy
-        end
-      end
-
-      describe "the default :unless filter" do
-        it "excludes a spec with  { :unless => true } metadata" do
-          example = example_with_metadata(:unless => true)
-          expect(exclude?(example)).to be_truthy
-        end
-
-        it "does not exclude a spec with { :unless => false } metadata" do
-          example = example_with_metadata(:unless => false)
-          expect(exclude?(example)).to be_falsey
-        end
-
-        it "does not exclude a spec with { :unless => nil } metadata" do
-          example = example_with_metadata(:unless => nil)
-          expect(exclude?(example)).to be_falsey
-        end
-
-        it "continues to be an exclusion even if exclusions are cleared" do
-          example = example_with_metadata(:unless => true)
-          filter_manager.exclusions.clear
-          expect(exclude?(example)).to be_truthy
-        end
+      it "does not exclude a spec with any value for :if/:unless metadata" do
+        expect(exclude_example_with_metadata?(:if => true)).to be(false)
+        expect(exclude_example_with_metadata?(:if => false)).to be(false)
+        expect(exclude_example_with_metadata?(:if => nil)).to be(false)
+        expect(exclude_example_with_metadata?(:unless => true)).to be(false)
+        expect(exclude_example_with_metadata?(:unless => false)).to be(false)
+        expect(exclude_example_with_metadata?(:unless => nil)).to be(false)
       end
     end
   end

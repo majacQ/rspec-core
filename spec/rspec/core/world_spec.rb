@@ -13,6 +13,37 @@ module RSpec::Core
         world.reset
         expect(world.example_groups).to be_empty
       end
+
+      it 'clears #source_from_file cache', :isolated_directory do
+        File.open('foo.rb', 'w') { |file| file.write('puts 1') }
+        expect(world.source_from_file('foo.rb').lines).to eq(['puts 1'])
+
+        File.open('foo.rb', 'w') { |file| file.write('puts 2') }
+        expect(world.source_from_file('foo.rb').lines).to eq(['puts 1'])
+
+        world.reset
+        expect(world.source_from_file('foo.rb').lines).to eq(['puts 2'])
+      end
+
+      it 'clears #syntax_highlighter memoization' do
+        expect { world.reset }.to change { world.syntax_highlighter.object_id }
+      end
+
+      it 'removes the previously assigned example group constants' do
+        RSpec.describe "group"
+
+        expect {
+          RSpec.world.reset
+        }.to change(RSpec::ExampleGroups, :constants).to([])
+      end
+
+      it 'clears #example_group_counts_by_spec_file' do
+        RSpec.describe "group"
+
+        expect {
+          RSpec.world.reset
+        }.to change { world.example_group_counts_by_spec_file }.to be_empty
+      end
     end
 
     describe "#example_groups" do
@@ -164,15 +195,18 @@ module RSpec::Core
       end
     end
 
-    describe '#source_cache' do
-      def source_from_file(path)
-        world.source_cache.source_from_file(path)
-      end
-
+    describe '#source_from_file' do
       it 'caches Source instances by file path' do
-        expect(source_from_file(__FILE__)).to be_a(Source).
-                                          and have_attributes(:path => __FILE__).
-                                          and equal(source_from_file(__FILE__))
+        expect(world.source_from_file(__FILE__)).to be_a(RSpec::Support::Source).
+                                                and have_attributes(:path => __FILE__).
+                                                and equal(world.source_from_file(__FILE__))
+      end
+    end
+
+    describe '#syntax_highlighter' do
+      it 'returns a memoized SyntaxHighlighter' do
+        expect(world.syntax_highlighter).to be_a(RSpec::Core::Formatters::SyntaxHighlighter).
+                                        and equal(world.syntax_highlighter)
       end
     end
 
@@ -182,19 +216,6 @@ module RSpec::Core
 
       context "when --only-failures is passed" do
         before { configuration.force(:only_failures => true) }
-
-        context "and all examples are filtered out" do
-          before do
-            configuration.filter_run_including :foo => 'bar'
-          end
-
-          it 'will ignore run_all_when_everything_filtered' do
-            configuration.run_all_when_everything_filtered = true
-            expect(world.filtered_examples).to_not receive(:clear)
-            expect(world.inclusion_filter).to_not receive(:clear)
-            world.announce_filters
-          end
-        end
 
         context "and `example_status_persistence_file_path` is not configured" do
           it 'aborts with a message explaining the config option must be set first' do
@@ -246,16 +267,6 @@ module RSpec::Core
 
         context "with an inclusion filter" do
           it "announces" do
-            configuration.filter_run_including :foo => 'bar'
-            expect(reporter).to receive(:message).
-              with(/All examples were filtered out/)
-            world.announce_filters
-          end
-        end
-
-        context "with an inclusion filter and run_all_when_everything_filtered" do
-          it "announces" do
-            allow(configuration).to receive(:run_all_when_everything_filtered?) { true }
             configuration.filter_run_including :foo => 'bar'
             expect(reporter).to receive(:message).
               with(/All examples were filtered out/)

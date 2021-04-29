@@ -3,6 +3,7 @@ module RSpec::Core
     include FormatterSupport
 
     let(:config)   { Configuration.new }
+    let(:world)    { World.new(config) }
     let(:reporter) { Reporter.new config }
     let(:start_time) { Time.now }
     let(:example) { super() }
@@ -25,7 +26,6 @@ module RSpec::Core
       it "dumps the failure summary after the profile and deprecation summary so failures don't scroll off the screen and get missed" do
         config.profile_examples = 10
         formatter = instance_double("RSpec::Core::Formatter::ProgressFormatter")
-        reporter.setup_profiler
         reporter.register_listener(formatter, :dump_summary, :dump_profile, :deprecation_summary)
 
         expect(formatter).to receive(:deprecation_summary).ordered
@@ -35,6 +35,12 @@ module RSpec::Core
         reporter.finish
       end
 
+      it "allows the profiler to be used without being manually setup" do
+        config.profile_examples = true
+        expect {
+          reporter.finish
+        }.to_not raise_error
+      end
     end
 
     describe 'start' do
@@ -151,6 +157,21 @@ module RSpec::Core
         end
 
         reporter.example_started(example)
+      end
+    end
+
+    describe "#exit_early" do
+      it "returns the passed exit code" do
+        expect(reporter.exit_early(42)).to eq(42)
+      end
+
+      it "sends a complete cycle of notifications" do
+        formatter = double("formatter")
+        %w[seed start start_dump dump_pending dump_failures dump_summary seed close].map(&:to_sym).each do |message|
+          reporter.register_listener formatter, message
+          expect(formatter).to receive(message).ordered
+        end
+        reporter.exit_early(42)
       end
     end
 
@@ -278,6 +299,34 @@ module RSpec::Core
         end
 
         reporter.finish
+      end
+    end
+
+    describe "#notify_non_example_exception" do
+      it "sends a `message` notification that contains the formatted exception details" do
+        formatter_out = StringIO.new
+        formatter = Formatters::ProgressFormatter.new(formatter_out)
+        reporter.register_listener formatter, :message
+
+        line = __LINE__ + 1
+        exception = 1 / 0 rescue $!
+        reporter.notify_non_example_exception(exception, "NonExample Context")
+
+        expect(formatter_out.string).to start_with(<<-EOS.gsub(/^ +\|/, '').chomp)
+          |
+          |NonExample Context
+          |Failure/Error: exception = 1 / 0 rescue $!
+          |
+          |ZeroDivisionError:
+          |  divided by 0
+          |# #{Metadata.relative_path(__FILE__)}:#{line}
+        EOS
+      end
+
+      it "records the fact that a non example failure has occurred" do
+        expect {
+          reporter.notify_non_example_exception(Exception.new, "NonExample Context")
+        }.to change(world, :non_example_failure).from(a_falsey_value).to(true)
       end
     end
   end

@@ -13,13 +13,14 @@ module RSpec
       # @overload before(scope, &block)
       #   @param scope [Symbol] `:example`, `:context`, or `:suite`
       #     (defaults to `:example`)
-      # @overload before(scope, conditions, &block)
+      # @overload before(scope, *conditions, &block)
       #   @param scope [Symbol] `:example`, `:context`, or `:suite`
       #     (defaults to `:example`)
-      #   @param conditions [Hash]
-      #     constrains this hook to examples matching these conditions e.g.
+      #   @param conditions [Array<Symbol>, Hash] constrains this hook to
+      #     examples matching these conditions e.g.
       #     `before(:example, :ui => true) { ... }` will only run with examples
-      #     or groups declared with `:ui => true`.
+      #     or groups declared with `:ui => true`. Symbols will be transformed
+      #     into hash entries with `true` values.
       # @overload before(conditions, &block)
       #   @param conditions [Hash]
       #     constrains this hook to examples matching these conditions e.g.
@@ -59,8 +60,10 @@ module RSpec
       #     before(:example)  # Declared in a parent group.
       #     before(:example)  # Declared in the current group.
       #
-      # If more than one `before` is declared within any one scope, they are run
-      # in the order in which they are declared.
+      # If more than one `before` is declared within any one example group, they
+      # are run in the order in which they are declared. Any `around` hooks will
+      # execute after `before` context hooks but before any `before` example
+      # hook regardless of where they are declared.
       #
       # ### Conditions
       #
@@ -74,11 +77,11 @@ module RSpec
       #       end
       #     end
       #
-      #     describe Something, :authorized => true do
+      #     RSpec.describe Something, :authorized => true do
       #       # The before hook will run in before each example in this group.
       #     end
       #
-      #     describe SomethingElse do
+      #     RSpec.describe SomethingElse do
       #       it "does something", :authorized => true do
       #         # The before hook will run before this example.
       #       end
@@ -109,9 +112,9 @@ module RSpec
       #
       # ### Warning: implicit before blocks
       #
-      # `before` hooks can also be declared in shared contexts which get
-      # included implicitly either by you or by extension libraries. Since
-      # RSpec runs these in the order in which they are declared within each
+      # `before` hooks can also be declared in configuration-level shared contexts
+      # which get included implicitly either by you or by extension libraries.
+      # Since RSpec runs these in the order in which they are declared within each
       # scope, load order matters, and can lead to confusing results when one
       # before block depends on state that is prepared in another before block
       # that gets run later.
@@ -159,7 +162,7 @@ module RSpec
       #
       # @example before(:example) declared in an {ExampleGroup}
       #
-      #     describe Thing do
+      #     RSpec.describe Thing do
       #       before(:example) do
       #         @thing = Thing.new
       #       end
@@ -171,7 +174,7 @@ module RSpec
       #
       # @example before(:context) declared in an {ExampleGroup}
       #
-      #     describe Parser do
+      #     RSpec.describe Parser do
       #       before(:context) do
       #         File.open(file_to_parse, 'w') do |f|
       #           f.write <<-CONTENT
@@ -191,7 +194,7 @@ module RSpec
       #
       # @note The `:example` and `:context` scopes are also available as
       #       `:each` and `:all`, respectively. Use whichever you prefer.
-      # @note The `:scope` alias is only supported for hooks registered on
+      # @note The `:suite` scope is only supported for hooks registered on
       #       `RSpec.configuration` since they exist independently of any
       #       example or example group.
       def before(*args, &block)
@@ -213,13 +216,14 @@ module RSpec
       # @overload after(scope, &block)
       #   @param scope [Symbol] `:example`, `:context`, or `:suite` (defaults to
       #     `:example`)
-      # @overload after(scope, conditions, &block)
+      # @overload after(scope, *conditions, &block)
       #   @param scope [Symbol] `:example`, `:context`, or `:suite` (defaults to
       #     `:example`)
-      #   @param conditions [Hash]
-      #     constrains this hook to examples matching these conditions e.g.
+      #   @param conditions [Array<Symbol>, Hash] constrains this hook to
+      #     examples matching these conditions e.g.
       #     `after(:example, :ui => true) { ... }` will only run with examples
-      #     or groups declared with `:ui => true`.
+      #     or groups declared with `:ui => true`. Symbols will be transformed
+      #     into hash entries with `true` values.
       # @overload after(conditions, &block)
       #   @param conditions [Hash]
       #     constrains this hook to examples matching these conditions e.g.
@@ -260,12 +264,14 @@ module RSpec
       #     after(:suite)   # Declared in RSpec.configure.
       #
       # This is the reverse of the order in which `before` hooks are run.
-      # Similarly, if more than one `after` is declared within any one scope,
-      # they are run in reverse order of that in which they are declared.
+      # Similarly, if more than one `after` is declared within any example
+      # group, they are run in reverse order of that in which they are declared.
+      # Also `around` hooks will run after any `after` example hooks are
+      # invoked but before any `after` context hooks.
       #
       # @note The `:example` and `:context` scopes are also available as
       #       `:each` and `:all`, respectively. Use whichever you prefer.
-      # @note The `:scope` alias is only supported for hooks registered on
+      # @note The `:suite` scope is only supported for hooks registered on
       #       `RSpec.configuration` since they exist independently of any
       #       example or example group.
       def after(*args, &block)
@@ -288,13 +294,15 @@ module RSpec
       #   @param scope [Symbol] `:example` (defaults to `:example`)
       #     present for syntax parity with `before` and `after`, but
       #     `:example`/`:each` is the only supported value.
-      # @overload around(scope, conditions, &block)
+      # @overload around(scope, *conditions, &block)
       #   @param scope [Symbol] `:example` (defaults to `:example`)
       #     present for syntax parity with `before` and `after`, but
       #     `:example`/`:each` is the only supported value.
-      #   @param conditions [Hash] constrains this hook to examples matching
-      #     these conditions e.g. `around(:example, :ui => true) { ... }` will
-      #     only run with examples or groups declared with `:ui => true`.
+      #   @param conditions [Array<Symbol>, Hash] constrains this hook to
+      #     examples matching these conditions e.g.
+      #     `around(:example, :ui => true) { ... }` will only run with examples
+      #     or groups declared with `:ui => true`. Symbols will be transformed
+      #     into hash entries with `true` values.
       # @overload around(conditions, &block)
       #   @param conditions [Hash] constrains this hook to examples matching
       #     these conditions e.g. `around(:example, :ui => true) { ... }` will
@@ -304,7 +312,7 @@ module RSpec
       #
       # @note the syntax of `around` is similar to that of `before` and `after`
       #   but the semantics are quite different. `before` and `after` hooks are
-      #   run in the context of of the examples with which they are associated,
+      #   run in the context of the examples with which they are associated,
       #   whereas `around` hooks are actually responsible for running the
       #   examples. Consequently, `around` hooks do not have direct access to
       #   resources that are made available within the examples and their
@@ -322,13 +330,22 @@ module RSpec
       #     end
       #
       # The yielded example aliases `run` with `call`, which lets you treat it
-      # like a `Proc`. This is especially handy when working with libaries
+      # like a `Proc`. This is especially handy when working with libraries
       # that manage their own setup and teardown using a block or proc syntax,
       # e.g.
       #
       #     around(:example) {|ex| Database.transaction(&ex)}
       #     around(:example) {|ex| FakeFS(&ex)}
       #
+      # ### Order
+      #
+      # The `around` hooks execute surrounding an example and its hooks.
+      #
+      # This means after any `before` context hooks, but before any `before`
+      # example hooks, and similarly after any `after` example hooks but before
+      # any `after` context hooks.
+      #
+      # They are not a synonym for `before`/`after`.
       def around(*args, &block)
         hooks.register :prepend, :around, *args, &block
       end
@@ -338,8 +355,6 @@ module RSpec
       def hooks
         @hooks ||= HookCollections.new(self, FilterableItemRepository::UpdateOptimized)
       end
-
-    private
 
       # @private
       Hook = Struct.new(:block, :options)
@@ -365,14 +380,7 @@ module RSpec
         def run(example)
           example.instance_exec(example, &block)
         rescue Support::AllExceptionsExceptOnesWeMustNotRescue => e
-          # TODO: Come up with a better solution for this.
-          RSpec.configuration.reporter.message <<-EOS
-
-An error occurred in an `after(:context)` hook.
-  #{e.class}: #{e.message}
-  occurred at #{e.backtrace.first}
-
-EOS
+          RSpec.configuration.reporter.notify_non_example_exception(e, "An error occurred in an `after(:context)` hook.")
         end
       end
 
@@ -385,16 +393,8 @@ EOS
                                 "#{hook_description} did not execute the example")
         end
 
-        if Proc.method_defined?(:source_location)
-          def hook_description
-            "around hook at #{Metadata.relative_path(block.source_location.join(':'))}"
-          end
-        else # for 1.8.7
-          # :nocov:
-          def hook_description
-            "around hook"
-          end
-          # :nocov:
+        def hook_description
+          "around hook at #{Metadata.relative_path(block.source_location.join(':'))}"
         end
       end
 
@@ -442,13 +442,13 @@ EOS
           scope, options = scope_and_options_from(*args)
 
           if scope == :suite
-            # TODO: consider making this an error in RSpec 4. For SemVer reasons,
-            # we are only warning in RSpec 3.
-            RSpec.warn_with "WARNING: `#{position}(:suite)` hooks are only supported on " \
-                            "the RSpec configuration object. This " \
-                            "`#{position}(:suite)` hook, registered on an example " \
-                            "group, will be ignored."
-            return
+            raise ArgumentError, "`#{position}(:suite)` hooks are only " \
+              "supported on the RSpec configuration object. This " \
+              "`#{position}(:suite)` hook, registered on an example " \
+              "group, will be ignored."
+          elsif scope == :context && position == :around
+            raise ArgumentError, "`around(:context)` hooks are not supported " \
+              "and behave like `around(:example)`."
           end
 
           hook = HOOK_TYPES[position][scope].new(block, options)
@@ -463,7 +463,9 @@ EOS
           return if RSpec.configuration.dry_run?
 
           if scope == :context
-            run_owned_hooks_for(position, :context, example_or_group)
+            unless example_or_group.class.metadata[:skip]
+              run_owned_hooks_for(position, :context, example_or_group)
+            end
           else
             case position
             when :before then run_example_hooks_for(example_or_group, :before, :reverse_each)
@@ -538,18 +540,18 @@ EOS
         def ensure_hooks_initialized_for(position, scope)
           if position == :before
             if scope == :example
-              @before_example_hooks ||= @filterable_item_repo_class.new(:all?)
+              @before_example_hooks ||= @filterable_item_repo_class.new
             else
-              @before_context_hooks ||= @filterable_item_repo_class.new(:all?)
+              @before_context_hooks ||= @filterable_item_repo_class.new
             end
           elsif position == :after
             if scope == :example
-              @after_example_hooks ||= @filterable_item_repo_class.new(:all?)
+              @after_example_hooks ||= @filterable_item_repo_class.new
             else
-              @after_context_hooks ||= @filterable_item_repo_class.new(:all?)
+              @after_context_hooks ||= @filterable_item_repo_class.new
             end
           else # around
-            @around_example_hooks ||= @filterable_item_repo_class.new(:all?)
+            @around_example_hooks ||= @filterable_item_repo_class.new
           end
         end
 
@@ -557,7 +559,7 @@ EOS
           hooks_to_process = globals.processable_hooks_for(position, scope, host)
           return if hooks_to_process.empty?
 
-          hooks_to_process -= FlatMap.flat_map(parent_groups) do |group|
+          hooks_to_process -= parent_groups.flat_map do |group|
             group.hooks.all_hooks_for(position, scope)
           end
           return if hooks_to_process.empty?
@@ -569,7 +571,7 @@ EOS
         def scope_and_options_from(*args)
           return :suite if args.first == :suite
           scope = extract_scope_from(args)
-          meta  = Metadata.build_hash_from(args, :warn_about_example_group_filtering)
+          meta  = Metadata.build_hash_from(args)
           return scope, meta
         end
 
@@ -602,7 +604,7 @@ EOS
         end
 
         def run_around_example_hooks_for(example)
-          hooks = FlatMap.flat_map(owner_parent_groups) do |group|
+          hooks = owner_parent_groups.flat_map do |group|
             group.hooks.matching_hooks_for(:around, :example, example)
           end
 
@@ -614,16 +616,8 @@ EOS
           end.call
         end
 
-        if respond_to?(:singleton_class) && singleton_class.ancestors.include?(singleton_class)
-          def owner_parent_groups
-            @owner.parent_groups
-          end
-        else # Ruby < 2.1 (see https://bugs.ruby-lang.org/issues/8035)
-          # :nocov:
-          def owner_parent_groups
-            @owner_parent_groups ||= [@owner] + @owner.parent_groups
-          end
-          # :nocov:
+        def owner_parent_groups
+          @owner.parent_groups
         end
       end
     end

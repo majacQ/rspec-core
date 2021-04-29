@@ -1,5 +1,5 @@
 <!---
-This file was generated on 2015-12-07T22:01:00+11:00 from the rspec-dev repo.
+This file was generated on 2020-12-26T20:29:41+00:00 from the rspec-dev repo.
 DO NOT modify it by hand as your changes will get lost the next time it is generated.
 -->
 
@@ -40,7 +40,7 @@ The spec suite performs a couple extra checks that are worth noting:
   available for use in any context, we want to minimize how many bits of the standard
   library we load and use. Otherwise, RSpec's use of part of the standard library could
   mask a problem where a gem author forgets to load a part of the standard library they
-  rely on. The spec suite contains a spec that defines a whitelist of allowed loaded
+  rely on. The spec suite contains a spec that defines a list of allowed loaded
   stdlibs.
 
 In addition, we use [SimpleCov](https://github.com/colszowka/simplecov)
@@ -68,8 +68,8 @@ $ bin/cucumber
 
 ## YARD documentation
 
-RSpec uses [YARD](http://yardoc.org/) for API documentation on the [rspec.info site](http://rspec.info/).
-Our commitment to [SemVer](htp://semver.org) requires that we explicitly
+RSpec uses [YARD](https://yardoc.org/) for API documentation on the [rspec.info site](https://rspec.info/).
+Our commitment to [SemVer](https://semver.org) requires that we explicitly
 declare our public API, and our build uses YARD to ensure that every
 class, module and method has either been labeled `@private` or has at
 least some level of documentation. For new APIs, this forces us to make
@@ -97,10 +97,11 @@ $ bundle exec yard doc --no-cache
 $ bin/yard doc --no-cache
 ```
 
-## Rubocop
+## RuboCop
 
-We use [Rubocop](https://github.com/bbatsov/rubocop) to enforce style conventions on the project so
-that the code has stylistic consistency throughout. Run with:
+We use [RuboCop](https://github.com/rubocop-hq/rubocop) to enforce style
+conventions on the project so that the code has stylistic consistency
+throughout. Run with:
 
 ```
 $ bundle exec rubocop lib
@@ -110,9 +111,9 @@ $ bundle exec rubocop lib
 $ bin/rubocop lib
 ```
 
-Our Rubocop configuration is a work-in-progress, so if you get a failure
-due to a Rubocop default, feel free to ask about changing the
-configuration. Otherwise, you'll need to address the Rubocop failure,
+Our RuboCop configuration is a work-in-progress, so if you get a failure
+due to a RuboCop default, feel free to ask about changing the
+configuration. Otherwise, you'll need to address the RuboCop failure,
 or, as a measure of last resort, by wrapping the offending code in
 comments like `# rubocop:disable SomeCheck` and `# rubocop:enable SomeCheck`.
 
@@ -146,4 +147,3 @@ build for another repo, so our CI build includes a spec that runs the
 spec suite of each of the _other_ project repos. Note that we only run
 the spec suite, not the full build, of the other projects, as the spec
 suite runs very quickly compared to the full build.
-

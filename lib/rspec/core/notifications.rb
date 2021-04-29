@@ -1,3 +1,4 @@
+RSpec::Support.require_rspec_core "formatters/console_codes"
 RSpec::Support.require_rspec_core "formatters/exception_presenter"
 RSpec::Support.require_rspec_core "formatters/helpers"
 RSpec::Support.require_rspec_core "shell_escape"
@@ -41,18 +42,9 @@ module RSpec::Core
         execution_result = example.execution_result
 
         return SkippedExampleNotification.new(example) if execution_result.example_skipped?
-        return new(example) unless execution_result.status == :pending || execution_result.status == :failed
+        return FailedExampleNotification.new(example) if execution_result.status == :pending || execution_result.status == :failed
 
-        klass = if execution_result.pending_fixed?
-                  PendingExampleFixedNotification
-                elsif execution_result.status == :pending
-                  PendingExampleFailedAsExpectedNotification
-                else
-                  FailedExampleNotification
-                end
-
-        exception_presenter = Formatters::ExceptionPresenter::Factory.new(example).build
-        klass.new(example, exception_presenter)
+        new(example)
       end
 
       private_class_method :new
@@ -111,7 +103,7 @@ module RSpec::Core
         formatted = "\nFailures:\n"
 
         failure_notifications.each_with_index do |failure, index|
-          formatted << failure.fully_formatted(index.next, colorizer)
+          formatted += failure.fully_formatted(index.next, colorizer)
         end
 
         formatted
@@ -120,7 +112,7 @@ module RSpec::Core
       # @return [String] The list of pending examples, fully formatted in the
       #   way that RSpec's built-in formatters emit.
       def fully_formatted_pending_examples(colorizer=::RSpec::Core::Formatters::ConsoleCodes)
-        formatted = "\nPending: (Failures listed here are expected and do not affect your suite's status)\n"
+        formatted = "\nPending: (Failures listed here are expected and do not affect your suite's status)\n".dup
 
         pending_notifications.each_with_index do |notification, index|
           formatted << notification.fully_formatted(index.next, colorizer)
@@ -200,19 +192,19 @@ module RSpec::Core
         @exception_presenter.fully_formatted(failure_number, colorizer)
       end
 
+      # @return [Array<string>] The failure information fully formatted in the way that
+      #   RSpec's built-in formatters emit, split by line.
+      def fully_formatted_lines(failure_number, colorizer=::RSpec::Core::Formatters::ConsoleCodes)
+        @exception_presenter.fully_formatted_lines(failure_number, colorizer)
+      end
+
     private
 
-      def initialize(example, exception_presenter)
+      def initialize(example, exception_presenter=Formatters::ExceptionPresenter::Factory.new(example).build)
         @exception_presenter = exception_presenter
         super(example)
       end
     end
-
-    # @deprecated Use {FailedExampleNotification} instead.
-    class PendingExampleFixedNotification < FailedExampleNotification; end
-
-    # @deprecated Use {FailedExampleNotification} instead.
-    class PendingExampleFailedAsExpectedNotification < FailedExampleNotification; end
 
     # The `SkippedExampleNotification` extends `ExampleNotification` with
     # things useful for specs that are skipped.
@@ -226,9 +218,14 @@ module RSpec::Core
       #   RSpec's built-in formatters emit.
       def fully_formatted(pending_number, colorizer=::RSpec::Core::Formatters::ConsoleCodes)
         formatted_caller = RSpec.configuration.backtrace_formatter.backtrace_line(example.location)
-        colorizer.wrap("\n  #{pending_number}) #{example.full_description}", :pending) << "\n     " <<
-          Formatters::ExceptionPresenter::PENDING_DETAIL_FORMATTER.call(example, colorizer) <<
-          "\n" << colorizer.wrap("     # #{formatted_caller}\n", :detail)
+
+        [
+          colorizer.wrap("\n  #{pending_number}) #{example.full_description}", :pending),
+          "\n     ",
+          Formatters::ExceptionPresenter::PENDING_DETAIL_FORMATTER.call(example, colorizer),
+          "\n",
+          colorizer.wrap("     # #{formatted_caller}\n", :detail)
+        ].join("")
       end
     end
 
@@ -281,8 +278,12 @@ module RSpec::Core
     # @attr pending_examples [Array<RSpec::Core::Example>] the pending examples
     # @attr load_time [Float] the number of seconds taken to boot RSpec
     #                         and load the spec files
+    # @attr errors_outside_of_examples_count [Integer] the number of errors that
+    #                                                  have occurred processing
+    #                                                  the spec suite
     SummaryNotification = Struct.new(:duration, :examples, :failed_examples,
-                                     :pending_examples, :load_time)
+                                     :pending_examples, :load_time,
+                                     :errors_outside_of_examples_count)
     class SummaryNotification
       # @api
       # @return [Fixnum] the number of examples run
@@ -305,9 +306,16 @@ module RSpec::Core
       # @api
       # @return [String] A line summarising the result totals of the spec run.
       def totals_line
-        summary = Formatters::Helpers.pluralize(example_count, "example")
-        summary << ", " << Formatters::Helpers.pluralize(failure_count, "failure")
-        summary << ", #{pending_count} pending" if pending_count > 0
+        summary = Formatters::Helpers.pluralize(example_count, "example") +
+          ", " + Formatters::Helpers.pluralize(failure_count, "failure")
+        summary += ", #{pending_count} pending" if pending_count > 0
+        if errors_outside_of_examples_count > 0
+          summary += (
+            ", " +
+            Formatters::Helpers.pluralize(errors_outside_of_examples_count, "error") +
+            " occurred outside of examples"
+          )
+        end
         summary
       end
 
@@ -321,7 +329,7 @@ module RSpec::Core
       #                          specific colors.
       # @return [String] A colorized results line.
       def colorized_totals_line(colorizer=::RSpec::Core::Formatters::ConsoleCodes)
-        if failure_count > 0
+        if failure_count > 0 || errors_outside_of_examples_count > 0
           colorizer.wrap(totals_line, RSpec.configuration.failure_color)
         elsif pending_count > 0
           colorizer.wrap(totals_line, RSpec.configuration.pending_color)
@@ -365,7 +373,7 @@ module RSpec::Core
                     "#{colorized_totals_line(colorizer)}\n"
 
         unless failed_examples.empty?
-          formatted << colorized_rerun_commands(colorizer) << "\n"
+          formatted += (colorized_rerun_commands(colorizer) + "\n")
         end
 
         formatted

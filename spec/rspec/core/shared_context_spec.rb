@@ -26,25 +26,27 @@ RSpec.describe RSpec::SharedContext do
 
     group.run
 
-    expect(before_all_hook).to be_truthy
-    expect(before_each_hook).to be_truthy
-    expect(after_each_hook).to be_truthy
-    expect(after_all_hook).to be_truthy
+    expect(before_all_hook).to be(true)
+    expect(before_each_hook).to be(true)
+    expect(after_each_hook).to be(true)
+    expect(after_all_hook).to be(true)
   end
 
   include RSpec::Core::SharedExampleGroup::TopLevelDSL
 
   it "runs the before each hooks in configuration before those of the shared context" do
     ordered_hooks = []
-    RSpec.configure do |c|
-      c.before(:each) { ordered_hooks << "config" }
-    end
 
-    RSpec.shared_context("before each stuff", :example => :before_each_hook_order) do
+    RSpec.shared_context("before each stuff") do
       before(:each) { ordered_hooks << "shared_context"}
     end
 
-    group = RSpec.describe "description", :example => :before_each_hook_order do
+    RSpec.configure do |c|
+      c.before(:each) { ordered_hooks << "config" }
+      c.include_context "before each stuff"
+    end
+
+    group = RSpec.describe "description" do
       before(:each) { ordered_hooks << "example_group" }
       example {}
     end
@@ -64,6 +66,19 @@ RSpec.describe RSpec::SharedContext do
     end
 
     expect(group.new.foo).to eq('foo')
+  end
+
+  it 'supports overriding let without warnings' do
+    shared = Module.new do
+      extend RSpec::SharedContext
+      let(:foo) { 'foo' }
+    end
+    group = RSpec.describe do
+      include shared
+      let(:foo) { 'bar' }
+    end
+
+    expect(group.new.foo).to eq('bar')
   end
 
   it "supports let when applied to an individual example via metadata" do

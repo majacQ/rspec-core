@@ -1,3 +1,5 @@
+RSpec::Support.require_rspec_support 'ruby_features'
+
 module RSpec
   module Core
     # Wrapper for an instance of a subclass of {ExampleGroup}. An instance of
@@ -34,7 +36,7 @@ module RSpec
     #     shared_examples "auditable" do
     #       it "does something" do
     #         log "#{example.full_description}: #{auditable.inspect}"
-    #         auditable.should do_something
+    #         expect(auditable).to do_something
     #       end
     #     end
     #
@@ -87,7 +89,7 @@ module RSpec
       def inspect_output
         inspect_output = "\"#{description}\""
         unless metadata[:description].to_s.empty?
-          inspect_output << " (#{location})"
+          inspect_output += " (#{location})"
         end
         inspect_output
       end
@@ -101,15 +103,6 @@ module RSpec
             return meta[:location] if loaded_spec_files.include?(meta[:absolute_file_path])
           end
         end
-      end
-
-      # Returns the location-based argument that can be passed to the `rspec` command to rerun this example.
-      #
-      # @deprecated Use {#location_rerun_argument} instead.
-      # @note If there are multiple examples identified by this location, they will use {#id}
-      #   to rerun instead, but this method will still return the location (that's why it is deprecated!).
-      def rerun_argument
-        location_rerun_argument
       end
 
       # @return [String] the unique id of this example. Pass
@@ -138,8 +131,10 @@ module RSpec
 
         # don't clone the example group because the new example
         # must belong to the same example group (not a clone).
+        #
+        # block is nil in new_metadata so we have to get it from metadata.
         Example.new(example_group, description.clone,
-                    new_metadata, new_metadata[:block])
+                    new_metadata, metadata[:block])
       end
 
       # @private
@@ -201,10 +196,13 @@ module RSpec
           description, example_block
         )
 
+        config = RSpec.configuration
+        config.apply_derived_metadata_to(@metadata)
+
         # This should perhaps be done in `Metadata::ExampleHash.create`,
         # but the logic there has no knowledge of `RSpec.world` and we
         # want to keep it that way. It's easier to just assign it here.
-        @metadata[:last_run_status] = RSpec.configuration.last_run_statuses[id]
+        @metadata[:last_run_status] = config.last_run_statuses[id]
 
         @example_group_instance = @exception = nil
         @clock = RSpec::Core::Time
@@ -226,8 +224,13 @@ module RSpec
         @example_group_class
       end
 
-      alias_method :pending?, :pending
-      alias_method :skipped?, :skip
+      def pending?
+        !!pending
+      end
+
+      def skipped?
+        !!skip
+      end
 
       # @api private
       # instance_execs the block passed to the constructor in the context of
@@ -258,7 +261,11 @@ module RSpec
                         'Expected example to fail since it is pending, but it passed.',
                         [location]
                 end
-              rescue Pending::SkipDeclaredInExample
+              rescue Pending::SkipDeclaredInExample => _
+                # The "=> _" is normally useless but on JRuby it is a workaround
+                # for a bug that prevents us from getting backtraces:
+                # https://github.com/jruby/jruby/issues/4467
+                #
                 # no-op, required metadata has already been set by the `skip`
                 # method.
               rescue AllExceptionsExcludingDangerousOnesOnRubiesThatAllowIt => e
@@ -280,7 +287,7 @@ module RSpec
         RSpec.current_example = nil
       end
 
-      if RSpec::Support::Ruby.jruby? || RUBY_VERSION.to_f < 1.9
+      if RSpec::Support::Ruby.jruby?
         # :nocov:
         # For some reason, rescuing `Support::AllExceptionsExceptOnesWeMustNotRescue`
         # in place of `Exception` above can cause the exit status to be the wrong
@@ -387,7 +394,7 @@ module RSpec
         end
       end
 
-      # rubocop:disable Style/AccessorMethodName
+      # rubocop:disable Naming/AccessorMethodName
 
       # @private
       #
@@ -414,7 +421,7 @@ module RSpec
         self.display_exception = exception
       end
 
-      # rubocop:enable Style/AccessorMethodName
+      # rubocop:enable Naming/AccessorMethodName
 
       # @private
       #
@@ -461,26 +468,26 @@ module RSpec
       def finish(reporter)
         pending_message = execution_result.pending_message
 
-        reporter.example_finished(self)
         if @exception
-          record_finished :failed
           execution_result.exception = @exception
+          record_finished :failed, reporter
           reporter.example_failed self
           false
         elsif pending_message
-          record_finished :pending
           execution_result.pending_message = pending_message
+          record_finished :pending, reporter
           reporter.example_pending self
           true
         else
-          record_finished :passed
+          record_finished :passed, reporter
           reporter.example_passed self
           true
         end
       end
 
-      def record_finished(status)
+      def record_finished(status, reporter)
         execution_result.record_finished(status, clock.now)
+        reporter.example_finished(self)
       end
 
       def run_before_example
@@ -517,7 +524,7 @@ module RSpec
       def assign_generated_description
         if metadata[:description].empty? && (description = generate_description)
           metadata[:description] = description
-          metadata[:full_description] << description
+          metadata[:full_description] += description
         end
       ensure
         RSpec::Matchers.clear_generated_description
@@ -535,10 +542,7 @@ module RSpec
       end
 
       # Represents the result of executing an example.
-      # Behaves like a hash for backwards compatibility.
       class ExecutionResult
-        include HashImitatable
-
         # @return [Symbol] `:passed`, `:failed` or `:pending`.
         attr_accessor :status
 
@@ -568,7 +572,9 @@ module RSpec
         #   this indicates whether or not it now passes.
         attr_accessor :pending_fixed
 
-        alias pending_fixed? pending_fixed
+        def pending_fixed?
+          !!pending_fixed
+        end
 
         # @return [Boolean] Indicates if the example was completely skipped
         #   (typically done via `:skip` metadata or the `skip` method). Skipped examples
@@ -598,50 +604,24 @@ module RSpec
           self.finished_at = finished_at
           self.run_time    = (finished_at - started_at).to_f
         end
-
-        # For backwards compatibility we present `status` as a string
-        # when presenting the legacy hash interface.
-        def hash_for_delegation
-          super.tap do |hash|
-            hash[:status] &&= status.to_s
-          end
-        end
-
-        def set_value(name, value)
-          value &&= value.to_sym if name == :status
-          super(name, value)
-        end
-
-        def get_value(name)
-          if name == :status
-            status.to_s if status
-          else
-            super
-          end
-        end
-
-        def issue_deprecation(_method_name, *_args)
-          RSpec.deprecate("Treating `metadata[:execution_result]` as a hash",
-                          :replacement => "the attributes methods to access the data")
-        end
       end
     end
 
     # @private
     # Provides an execution context for before/after :suite hooks.
     class SuiteHookContext < Example
-      def initialize
-        super(AnonymousExampleGroup, "", {})
+      def initialize(hook_description, reporter)
+        super(AnonymousExampleGroup, hook_description, {})
         @example_group_instance = AnonymousExampleGroup.new
+        @reporter = reporter
       end
 
-      # rubocop:disable Style/AccessorMethodName
-
-      # To ensure we don't silence errors.
+      # rubocop:disable Naming/AccessorMethodName
       def set_exception(exception)
-        raise exception
+        reporter.notify_non_example_exception(exception, "An error occurred in #{description}.")
+        RSpec.world.wants_to_quit = true
       end
-      # rubocop:enable Style/AccessorMethodName
+      # rubocop:enable Naming/AccessorMethodName
     end
   end
 end

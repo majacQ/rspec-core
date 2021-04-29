@@ -14,14 +14,14 @@ module RSpecConfigurationOverrides
   end
 
   def include(mod, *filters)
-    meta = RSpec::Core::Metadata.build_hash_from(filters, :warn_about_example_group_filtering)
+    meta = RSpec::Core::Metadata.build_hash_from(filters)
     @include_extend_or_prepend_modules << [:include, mod, meta]
     super
   end
 
   def old_configure_group(group)
     @include_extend_or_prepend_modules.each do |include_extend_or_prepend, mod, filters|
-      next unless filters.empty? || RSpec::Core::MetadataFilter.apply?(:any?, filters, group.metadata)
+      next unless filters.empty? || RSpec::Core::MetadataFilter.apply?(filters, group.metadata)
       __send__("safe_#{include_extend_or_prepend}", mod, group)
     end
   end

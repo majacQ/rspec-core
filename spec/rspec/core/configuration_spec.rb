@@ -2,7 +2,6 @@ require 'tmpdir'
 require 'rspec/support/spec/in_sub_process'
 
 module RSpec::Core
-
   RSpec.describe Configuration do
     include RSpec::Support::InSubProcess
 
@@ -11,14 +10,6 @@ module RSpec::Core
     let(:inclusion_filter) { config.inclusion_filter.rules }
 
     before { config.world = RSpec.world }
-
-    shared_examples_for "warning of deprecated `:example_group` during filtering configuration" do |method, *args|
-      it "issues a deprecation warning when filtering by `:example_group`" do
-        args << { :example_group => { :file_location => /spec\/unit/ } }
-        expect_deprecation_with_call_site(__FILE__, __LINE__ + 1, /:example_group/)
-        config.__send__(method, *args)
-      end
-    end
 
     describe '#on_example_group_definition' do
       before do
@@ -42,13 +33,106 @@ module RSpec::Core
       end
     end
 
+    describe "#fail_fast=" do
+      context 'when true' do
+        it 'is set to true' do
+          config.fail_fast = true
+          expect(config.fail_fast).to eq true
+        end
+      end
+
+      context "when 'true'" do
+        it 'is set to true' do
+          config.fail_fast = 'true'
+          expect(config.fail_fast).to eq true
+        end
+      end
+
+      context "when false" do
+        it 'is set to false' do
+          config.fail_fast = false
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when 'false'" do
+        it 'is set to false' do
+          config.fail_fast = 'false'
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when 0" do
+        it 'is set to false' do
+          config.fail_fast = 0
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when integer number" do
+        it 'is set to number' do
+          config.fail_fast = 5
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when floating point number" do
+        it 'is set to integer number' do
+          config.fail_fast = 5.9
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when string represeting an integer number" do
+        it 'is set to number' do
+          config.fail_fast = '5'
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when nil" do
+        it 'is nil' do
+          config.fail_fast = nil
+          expect(config.fail_fast).to eq nil
+        end
+      end
+
+      context "when unrecognized value" do
+        before do
+          allow(RSpec).to receive(:warning)
+        end
+
+        it 'raises an error' do
+          expect {
+            config.fail_fast = 'yes'
+          }.to raise_error(ArgumentError, /Cannot set `RSpec.configuration.fail_fast`/i)
+        end
+      end
+    end
+
+    describe 'fail_if_no_examples' do
+      it 'defaults to false' do
+        expect(RSpec::Core::Configuration.new.fail_if_no_examples).to be(false)
+      end
+
+      it 'can be set to true' do
+        config.fail_if_no_examples = true
+        expect(config.fail_if_no_examples).to eq(true)
+      end
+
+      it 'can be set to false' do
+        config.fail_if_no_examples = false
+        expect(config.fail_if_no_examples).to eq(false)
+      end
+    end
+
     describe '#deprecation_stream' do
       it 'defaults to standard error' do
         expect($rspec_core_without_stderr_monkey_patch.deprecation_stream).to eq STDERR
       end
 
       it 'is configurable' do
-        io = double 'deprecation io'
+        io = StringIO.new
         config.deprecation_stream = io
         expect(config.deprecation_stream).to eq io
       end
@@ -81,9 +165,11 @@ module RSpec::Core
       it 'defaults to standard output' do
         expect(config.output_stream).to eq $stdout
       end
+    end
 
+    describe "#output_stream=" do
       it 'is configurable' do
-        io = double 'output io'
+        io = StringIO.new
         config.output_stream = io
         expect(config.output_stream).to eq io
       end
@@ -195,7 +281,7 @@ module RSpec::Core
           mod_config.custom_setting = true
         end
 
-        expect(mod.configuration.custom_setting).to be_truthy
+        expect(mod.configuration.custom_setting).to be(true)
       end
 
       it "raises if framework module doesn't support configuration" do
@@ -214,12 +300,10 @@ module RSpec::Core
       it_behaves_like "a configurable framework adapter", :mock_with
 
       it "allows rspec-mocks to be configured with a provided block" do
-        mod = Module.new
-
-        expect(RSpec::Mocks.configuration).to receive(:add_stub_and_should_receive_to).with(mod)
+        expect(RSpec::Mocks.configuration).to receive(:verify_partial_doubles=).with(true)
 
         config.mock_with :rspec do |c|
-          c.add_stub_and_should_receive_to mod
+          c.verify_partial_doubles = true
         end
       end
 
@@ -292,8 +376,7 @@ module RSpec::Core
 
       context "when rspec-expectations is not installed" do
         def an_anonymous_module
-          name = RUBY_VERSION.to_f < 1.9 ? '' : nil
-          an_object_having_attributes(:class => Module, :name => name)
+          an_object_having_attributes(:class => Module, :name => nil)
         end
 
         it 'gracefully falls back to an anonymous module' do
@@ -437,9 +520,7 @@ module RSpec::Core
         expect(config.files_to_run).to contain_files("./spec/rspec/core/resources/a_spec.rb")
       end
 
-      it "supports absolute path patterns", :failing_on_appveyor,
-        :pending => false,
-        :skip => (ENV['APPVEYOR'] ? "Failing on AppVeyor but :pending isn't working for some reason" : false) do
+      it "supports absolute path patterns" do
         dir = File.expand_path("../resources", __FILE__)
         config.pattern = File.join(dir, "**/*_spec.rb")
         assign_files_or_directories_to_run "spec"
@@ -515,12 +596,12 @@ module RSpec::Core
           expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb", "spec/rspec/core/resources/acceptance/foo_spec.rb")
         end
 
-        it "loads files in Windows", :if => RSpec::Support::OS.windows? do
+        it "loads files in Windows", :skip => !RSpec::Support::OS.windows? do
           assign_files_or_directories_to_run "C:\\path\\to\\project\\spec\\sub\\foo_spec.rb"
           expect(config.files_to_run).to contain_files("C:/path/to/project/spec/sub/foo_spec.rb")
         end
 
-        it "loads files in Windows when directory is specified", :failing_on_appveyor, :if => RSpec::Support::OS.windows? do
+        it "loads files in Windows when directory is specified", :failing_on_windows_ci, :skip => !RSpec::Support::OS.windows? do
           assign_files_or_directories_to_run "spec\\rspec\\core\\resources"
           expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb")
         end
@@ -901,8 +982,7 @@ module RSpec::Core
       end
     end
 
-    config_methods = %w[ include extend ]
-    config_methods << "prepend" if RSpec::Support::RubyFeatures.module_prepends_supported?
+    config_methods = %w[ include extend prepend ]
     config_methods.each do |config_method|
       it "raises an immediate `TypeError` when you attempt to `config.#{config_method}` with something besides a module" do
         expect {
@@ -955,8 +1035,6 @@ module RSpec::Core
     end
 
     describe "#include" do
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :include, Enumerable
-
       module InstanceLevelMethods
         def you_call_this_a_blt?
           "egad man, where's the mayo?!?!?"
@@ -1000,16 +1078,6 @@ module RSpec::Core
           end
 
           group = RSpec.describe('does like, stuff and junk', :magic_key => :include) { }
-          expect(group).not_to respond_to(:you_call_this_a_blt?)
-          expect(group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
-        end
-
-        it "includes in example groups that match a deprecated `:example_group` filter" do
-          RSpec.configure do |c|
-            c.include(InstanceLevelMethods, :example_group => { :file_path => /./ })
-          end
-
-          group = RSpec.describe('does like, stuff and junk')
           expect(group).not_to respond_to(:you_call_this_a_blt?)
           expect(group.new.you_call_this_a_blt?).to eq("egad man, where's the mayo?!?!?")
         end
@@ -1099,8 +1167,6 @@ module RSpec::Core
     end
 
     describe "#extend" do
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :extend, Enumerable
-
       module ThatThingISentYou
         def that_thing
         end
@@ -1137,9 +1203,7 @@ module RSpec::Core
       end
     end
 
-    describe "#prepend", :if => RSpec::Support::RubyFeatures.module_prepends_supported? do
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :prepend, Enumerable
-
+    describe "#prepend" do
       module SomeRandomMod
         def foo
           "foobar"
@@ -1201,81 +1265,130 @@ module RSpec::Core
 
     end
 
-    describe "#run_all_when_everything_filtered?" do
+    describe "#color_enabled?" do
+      it "allows overriding instance output stream with an argument" do
+        config.output_stream = StringIO.new
+        output_override = StringIO.new
 
-      it "defaults to false" do
-        expect(config.run_all_when_everything_filtered?).to be_falsey
+        allow(config.output_stream).to receive_messages(:tty? => false)
+        allow(output_override).to receive_messages(:tty? => true)
+
+        expect(config.color_enabled?).to be false
+        expect(config.color_enabled?(output_override)).to be true
       end
 
-      it "can be queried with question method" do
-        config.run_all_when_everything_filtered = true
-        expect(config.run_all_when_everything_filtered?).to be_truthy
+      context "with color_mode :automatic" do
+        before { config.color_mode = :automatic }
+
+        context "with output.tty?" do
+          it "sets color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => true)
+            expect(config.color_enabled?).to be true
+          end
+        end
+
+        context "with !output.tty?" do
+          it "sets !color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => false)
+            expect(config.color_enabled?).to be false
+          end
+        end
+      end
+
+      context "with color_mode :on" do
+        before { config.color_mode = :on }
+
+        context "with output.tty?" do
+          it "sets color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => true)
+            expect(config.color_enabled?).to be true
+          end
+        end
+
+        context "with !output.tty?" do
+          it "sets color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => false)
+            expect(config.color_enabled?).to be true
+          end
+        end
+      end
+
+      context "with color_mode :off" do
+        before { config.color_mode = :off }
+
+        context "with output.tty?" do
+          it "sets !color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => true)
+            expect(config.color_enabled?).to be false
+          end
+        end
+
+        context "with !output.tty?" do
+          it "sets !color_enabled?" do
+            config.output_stream = StringIO.new
+            allow(config.output_stream).to receive_messages(:tty? => false)
+            expect(config.color_enabled?).to be false
+          end
+        end
       end
     end
 
-    describe "#color=" do
-      context "given true" do
-        before { config.color = true }
+    describe '#color_mode' do
+      it "prefers incoming cli_args" do
+        config.output_stream = StringIO.new
+        config.force :color_mode => :on
+        config.color_mode = :off
+        expect(config.color_mode).to be :on
+      end
+    end
 
-        context "with config.tty? and output.tty?" do
-          it "sets color_enabled?" do
-            output = StringIO.new
-            config.output_stream = output
-
-            config.tty = true
-            allow(config.output_stream).to receive_messages :tty? => true
-
-            expect(config.color_enabled?).to be_truthy
-            expect(config.color_enabled?(output)).to be_truthy
-          end
+    describe "#bisect_runner_class" do
+      if RSpec::Support::RubyFeatures.fork_supported?
+        it 'defaults to the faster `Bisect::ForkRunner` since fork is supported on this platform' do
+          expect(config.bisect_runner_class).to be Bisect::ForkRunner
         end
-
-        context "with config.tty? and !output.tty?" do
-          it "sets color_enabled?" do
-            output = StringIO.new
-            config.output_stream = output
-
-            config.tty = true
-            allow(config.output_stream).to receive_messages :tty? => false
-
-            expect(config.color_enabled?).to be_truthy
-            expect(config.color_enabled?(output)).to be_truthy
-          end
-        end
-
-        context "with config.tty? and !output.tty?" do
-          it "does not set color_enabled?" do
-            output = StringIO.new
-            config.output_stream = output
-
-            config.tty = false
-            allow(config.output_stream).to receive_messages :tty? => true
-
-            expect(config.color_enabled?).to be_truthy
-            expect(config.color_enabled?(output)).to be_truthy
-          end
-        end
-
-        context "with !config.tty? and !output.tty?" do
-          it "does not set color_enabled?" do
-            output = StringIO.new
-            config.output_stream = output
-
-            config.tty = false
-            allow(config.output_stream).to receive_messages :tty? => false
-
-            expect(config.color_enabled?).to be_falsey
-            expect(config.color_enabled?(output)).to be_falsey
-          end
+      else
+        it 'defaults to the slower `Bisect::ShellRunner` since fork is not supported on this platform' do
+          expect(config.bisect_runner_class).to be Bisect::ShellRunner
         end
       end
 
-      it "prefers incoming cli_args" do
-        config.output_stream = StringIO.new
-        allow(config.output_stream).to receive_messages :tty? => true
-        config.force :color => true
-        config.color = false
-        expect(config.color).to be_truthy
+      it "returns `Bisect::ForkRunner` when `bisect_runner == :fork" do
+        config.bisect_runner = :fork
+        expect(config.bisect_runner_class).to be Bisect::ForkRunner
+      end
+
+      it "returns `Bisect::ShellRunner` when `bisect_runner == :shell" do
+        config.bisect_runner = :shell
+        expect(config.bisect_runner_class).to be Bisect::ShellRunner
+      end
+
+      it "raises a clear error when `bisect_runner` is configured to an unrecognized value" do
+        config.bisect_runner = :unknown
+        expect {
+          config.bisect_runner_class
+        }.to raise_error(/Unsupported value for `bisect_runner`/)
+      end
+
+      it 'cannot be changed after the runner is in use' do
+        config.bisect_runner = :fork
+        config.bisect_runner_class
+
+        expect {
+          config.bisect_runner = :shell
+        }.to raise_error(/config.bisect_runner = :shell/)
+      end
+
+      it 'can be set to the same value after the runner is in use' do
+        config.bisect_runner = :shell
+        config.bisect_runner_class
+
+        expect { config.bisect_runner = :shell }.not_to raise_error
       end
     end
 
@@ -1293,6 +1406,53 @@ module RSpec::Core
         config.add_formatter 'doc'
         config.formatters.clear
         expect(config.formatters).to_not eq []
+      end
+    end
+
+    describe '#reporter' do
+      before do
+        config.output_stream = StringIO.new
+        config.deprecation_stream = StringIO.new
+      end
+
+      it 'does not immediately trigger formatter setup' do
+        config.reporter
+
+        expect(config.formatters).to be_empty
+      end
+
+      it 'buffers deprecations until the reporter is ready' do
+        allow(config.formatter_loader).to receive(:prepare_default).and_wrap_original do |original, *args|
+          config.reporter.deprecation :message => 'Test deprecation'
+          original.call(*args)
+        end
+        expect {
+          config.reporter.notify :deprecation_summary, Notifications::NullNotification
+        }.to change { config.deprecation_stream.string }.to include 'Test deprecation'
+      end
+
+      it 'allows registering listeners without doubling up formatters' do
+        config.reporter.register_listener double(:message => nil), :message
+
+        expect {
+          config.formatter = :documentation
+        }.to change { config.formatters.size }.from(0).to(1)
+
+        # notify triggers the formatter setup, there are two due to the already configured
+        # documentation formatter and deprecation formatter
+        expect {
+          config.reporter.notify :message, double(:message => 'Triggers formatter setup')
+        }.to change { config.formatters.size }.from(1).to(2)
+      end
+
+      it 'still configures a default formatter when none specified' do
+        config.reporter.register_listener double(:message => nil), :message
+
+        # notify triggers the formatter setup, there are two due to the default
+        # (progress) and deprecation formatter
+        expect {
+          config.reporter.notify :message, double(:message => 'Triggers formatter setup')
+        }.to change { config.formatters.size }.from(0).to(2)
       end
     end
 
@@ -1317,8 +1477,13 @@ module RSpec::Core
       end
 
       context 'when no other formatter has been set' do
+        before do
+          config.output_stream = StringIO.new
+        end
+
         it 'gets used' do
           config.default_formatter = 'doc'
+          config.reporter.notify :message, double(:message => 'Triggers formatter setup')
 
           expect(used_formatters).not_to include(an_instance_of Formatters::ProgressFormatter)
           expect(used_formatters).to include(an_instance_of Formatters::DocumentationFormatter)
@@ -1352,8 +1517,6 @@ module RSpec::Core
         end
       end
 
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :filter_run_including
-
       it "sets the filter with a hash" do
         config.filter_run_including :foo => true
         expect(inclusion_filter).to eq( {:foo => true} )
@@ -1378,8 +1541,6 @@ module RSpec::Core
           config.exclusion_filter.rules
         end
       end
-
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :filter_run_excluding
 
       it "sets the filter" do
         config.filter_run_excluding :foo => true
@@ -1417,19 +1578,10 @@ module RSpec::Core
           config.send("#{type}=", {:want => :this})
           expect(send(type)).to eq( {:want => :this} )
         end
-
-        include_examples "warning of deprecated `:example_group` during filtering configuration", :"#{type}="
       end
     end
     it_behaves_like "a spec filter", :inclusion_filter
     it_behaves_like "a spec filter", :exclusion_filter
-
-    describe "#treat_symbols_as_metadata_keys_with_true_values=" do
-      it 'is deprecated' do
-        expect_deprecation_with_call_site(__FILE__, __LINE__ + 1)
-        config.treat_symbols_as_metadata_keys_with_true_values = true
-      end
-    end
 
     describe "#full_backtrace=" do
       it "doesn't impact other instances of config" do
@@ -1437,14 +1589,14 @@ module RSpec::Core
         config_2 = Configuration.new
 
         config_1.full_backtrace = true
-        expect(config_2.full_backtrace?).to be_falsey
+        expect(config_2.full_backtrace?).to be(false)
       end
     end
 
     describe "#backtrace_exclusion_patterns=" do
       it "actually receives the new filter values" do
         config.backtrace_exclusion_patterns = [/.*/]
-        expect(config.backtrace_formatter.exclude? "this").to be_truthy
+        expect(config.backtrace_formatter.exclude? "this").to be(true)
       end
     end
 
@@ -1463,7 +1615,7 @@ module RSpec::Core
     describe "#backtrace_exclusion_patterns" do
       it "can be appended to" do
         config.backtrace_exclusion_patterns << /.*/
-        expect(config.backtrace_formatter.exclude? "this").to be_truthy
+        expect(config.backtrace_formatter.exclude? "this").to be(true)
       end
     end
 
@@ -1528,8 +1680,6 @@ module RSpec::Core
     end
 
     describe "#define_derived_metadata" do
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :define_derived_metadata
-
       it 'allows the provided block to mutate example group metadata' do
         RSpec.configuration.define_derived_metadata do |metadata|
           metadata[:reverse_description] = metadata[:description].reverse
@@ -1556,6 +1706,42 @@ module RSpec::Core
 
         group = RSpec.describe("bar")
         expect(group.metadata).to include(:b1_desc => "bar (block 1)", :b2_desc => "bar (block 1) (block 2)")
+      end
+
+      it 'supports cascades of derived metadata, but avoids re-running derived metadata blocks that have already been applied' do
+        RSpec.configure do |c|
+          c.define_derived_metadata(:foo1) { |m| m[:foo2] = (m[:foo2] || 0) + 1 }
+          c.define_derived_metadata(:foo2) { |m| m[:foo3] = (m[:foo3] || 0) + 1 }
+          c.define_derived_metadata(:foo3) { |m| m[:foo1] += 1 }
+        end
+
+        group = RSpec.describe("bar", :foo1 => 0)
+        expect(group.metadata).to include(:foo1 => 1, :foo2 => 1, :foo3 => 1)
+
+        ex = RSpec.describe("My group").example("foo", :foo1 => 0)
+        expect(ex.metadata).to include(:foo1 => 1, :foo2 => 1, :foo3 => 1)
+      end
+
+      it 'does not allow a derived metadata cascade to recurse infinitely' do
+        RSpec.configure do |c|
+          counter = 1
+          derive_next_metadata = lambda do |outer_meta|
+            tag = :"foo#{counter += 1}"
+            outer_meta[tag] = true
+
+            c.define_derived_metadata(tag) do |inner_meta|
+              derive_next_metadata.call(inner_meta)
+            end
+          end
+
+          c.define_derived_metadata(:foo1) do |meta|
+            derive_next_metadata.call(meta)
+          end
+        end
+
+        expect {
+          RSpec.describe("group", :foo1)
+        }.to raise_error(SystemStackError)
       end
 
       it "derives metadata before the group or example blocks are eval'd so their logic can depend on the derived metadata" do
@@ -1609,7 +1795,7 @@ module RSpec::Core
         registered_examples = nil
 
         RSpec.configuration.define_derived_metadata(:ex) do |_meta|
-          registered_examples = FlatMap.flat_map(RSpec.world.all_example_groups, &:examples)
+          registered_examples = RSpec.world.all_example_groups.flat_map(&:examples)
         end
 
         example = nil
@@ -1642,20 +1828,18 @@ module RSpec::Core
           expect(e3.metadata).not_to include(:reverse_description)
         end
 
-        it 'applies if any of multiple filters apply (to align with module inclusion semantics)' do
+        it 'applies if all of multiple filters apply (to align with module inclusion semantics)' do
           RSpec.configure do |c|
             c.define_derived_metadata(:a => 1, :b => 2) do |metadata|
               metadata[:reverse_description] = metadata[:description].reverse
             end
           end
 
-          g1 = RSpec.describe("G1", :a => 1)
+          g1 = RSpec.describe("G1", :a => 1, :b => 2)
           g2 = RSpec.describe("G2", :b => 2)
-          g3 = RSpec.describe("G3", :c => 3)
 
           expect(g1.metadata).to include(:reverse_description => "1G")
-          expect(g2.metadata).to include(:reverse_description => "2G")
-          expect(g3.metadata).not_to include(:reverse_description)
+          expect(g2.metadata).not_to include(:reverse_description)
         end
 
         it 'allows a metadata filter to be passed as a raw symbol' do
@@ -1675,8 +1859,6 @@ module RSpec::Core
     end
 
     describe "#when_first_matching_example_defined" do
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :when_first_matching_example_defined
-
       it "runs the block when the first matching example is defined" do
         sequence = []
         RSpec.configuration.when_first_matching_example_defined(:foo) do
@@ -1777,6 +1959,50 @@ module RSpec::Core
           expect(sequence).to eq [:before_group, :before_example, :callback, :after_example]
         end
       end
+
+      context 'when the value of the registered metadata is a Proc' do
+        it 'does not fire when later matching examples are defined' do
+          sequence = []
+          RSpec.configuration.when_first_matching_example_defined(:foo => proc { true }) do
+            sequence << :callback
+          end
+
+          RSpec.describe do
+            example("ex 1", :foo)
+            sequence.clear
+
+            sequence << :before_second_matching_example_defined
+            example("ex 2", :foo)
+            sequence << :after_second_matching_example_defined
+          end
+
+          expect(sequence).to eq [:before_second_matching_example_defined, :after_second_matching_example_defined]
+        end
+      end
+
+      context 'when a matching example group with other registered metadata has been defined' do
+        it 'does not fire when later matching examples with the other metadata are defined' do
+          sequence = []
+
+          RSpec.configuration.when_first_matching_example_defined(:foo) do
+            sequence << :callback
+          end
+
+          RSpec.configuration.when_first_matching_example_defined(:bar) do
+          end
+
+          RSpec.describe 'group', :foo, :bar do
+            example("ex 1", :foo)
+            sequence.clear
+
+            sequence << :before_second_matching_example_defined
+            example("ex 2", :foo, :bar)
+            sequence << :after_second_matching_example_defined
+          end
+
+          expect(sequence).to eq [:before_second_matching_example_defined, :after_second_matching_example_defined]
+        end
+      end
     end
 
     describe "#add_setting" do
@@ -1791,7 +2017,7 @@ module RSpec::Core
           end
 
           it "adds a predicate" do
-            expect(config.custom_option?).to be_falsey
+            expect(config.custom_option?).to be(false)
           end
 
           it "can be overridden" do
@@ -1810,7 +2036,7 @@ module RSpec::Core
           end
 
           it "returns true for the predicate" do
-            expect(config.custom_option?).to be_truthy
+            expect(config.custom_option?).to be(true)
           end
 
           it "can be overridden with a truthy value" do
@@ -1847,7 +2073,7 @@ module RSpec::Core
 
         it "delegates the predicate to the other option" do
           config.custom_option = true
-          expect(config.another_custom_option?).to be_truthy
+          expect(config.another_custom_option?).to be(true)
         end
       end
     end
@@ -1871,13 +2097,22 @@ module RSpec::Core
         expect(group.included_modules).to include(mod)
       end
 
-      it "requires only one matching filter" do
+      it "requires exact matching filter" do
+        mod = Module.new
+        group = RSpec.describe("group", :foo => :bar, :baz => :bam)
+
+        config.include(mod, :foo => :bar, :baz => :bam)
+        config.configure_group(group)
+        expect(group.included_modules).to include(mod)
+      end
+
+      it "doesn't include on incomplete matching filter" do
         mod = Module.new
         group = RSpec.describe("group", :foo => :bar)
 
         config.include(mod, :foo => :bar, :baz => :bam)
         config.configure_group(group)
-        expect(group.included_modules).to include(mod)
+        expect(group.included_modules).not_to include(mod)
       end
 
       module IncludeExtendOrPrependMeOnce
@@ -1917,8 +2152,7 @@ module RSpec::Core
         config.configure_group(child)
       end
 
-      it "doesn't prepend a module when already present in ancestor chain",
-        :if => RSpec::Support::RubyFeatures.module_prepends_supported? do
+      it "doesn't prepend a module when already present in ancestor chain" do
         config.prepend(IncludeExtendOrPrependMeOnce, :foo => :bar)
 
         group = RSpec.describe("group", :foo => :bar)
@@ -1959,20 +2193,13 @@ module RSpec::Core
       end
 
       it 'overrides existing definitions of the aliased method name without issueing warnings' do
-        config.expose_dsl_globally = true
-
         class << ExampleGroup
-          def my_group_method; :original; end
-        end
-
-        Module.class_exec do
           def my_group_method; :original; end
         end
 
         config.alias_example_group_to :my_group_method
 
         expect(ExampleGroup.my_group_method).to be < ExampleGroup
-        expect(Module.new.my_group_method).to be < ExampleGroup
       end
 
       it "allows adding additional metadata" do
@@ -2033,6 +2260,32 @@ module RSpec::Core
         config.reset
         expect(config.formatters).to be_empty
       end
+
+      it "clears the output wrapper" do
+        config.output_stream = StringIO.new
+        config.reset
+        expect(config.instance_variable_get("@output_wrapper")).to be_nil
+      end
+    end
+
+    describe "#reset_reporter" do
+      it "clears the reporter" do
+        expect(config.reporter).not_to be_nil
+        config.reset
+        expect(config.instance_variable_get("@reporter")).to be_nil
+      end
+
+      it "clears the formatters" do
+        config.add_formatter "doc"
+        config.reset
+        expect(config.formatters).to be_empty
+      end
+
+      it "clears the output wrapper" do
+        config.output_stream = StringIO.new
+        config.reset
+        expect(config.instance_variable_get("@output_wrapper")).to be_nil
+      end
     end
 
     def example_numbered(num)
@@ -2078,11 +2331,11 @@ module RSpec::Core
       it "forces 'false' value" do
         config.add_setting :custom_option
         config.custom_option = true
-        expect(config.custom_option?).to be_truthy
+        expect(config.custom_option?).to be(true)
         config.force :custom_option => false
-        expect(config.custom_option?).to be_falsey
+        expect(config.custom_option?).to be(false)
         config.custom_option = true
-        expect(config.custom_option?).to be_falsey
+        expect(config.custom_option?).to be(false)
       end
     end
 
@@ -2274,106 +2527,6 @@ module RSpec::Core
       end
     end
 
-    describe '#disable_monkey_patching!' do
-      let!(:config) { RSpec.configuration }
-      let!(:expectations) { RSpec::Expectations }
-      let!(:mocks) { RSpec::Mocks }
-
-      def in_fully_monkey_patched_rspec_environment
-        in_sub_process do
-          config.expose_dsl_globally = true
-          mocks.configuration.syntax = [:expect, :should]
-          mocks.configuration.patch_marshal_to_support_partial_doubles = true
-          expectations.configuration.syntax = [:expect, :should]
-
-          yield
-        end
-      end
-
-      it 'stops exposing the DSL methods globally' do
-        in_fully_monkey_patched_rspec_environment do
-          mod = Module.new
-          expect {
-            config.disable_monkey_patching!
-          }.to change { mod.respond_to?(:describe) }.from(true).to(false)
-        end
-      end
-
-      it 'stops using should syntax for expectations' do
-        in_fully_monkey_patched_rspec_environment do
-          obj = Object.new
-          config.expect_with :rspec
-          expect {
-            config.disable_monkey_patching!
-          }.to change { obj.respond_to?(:should) }.from(true).to(false)
-        end
-      end
-
-      it 'stops using should syntax for mocks' do
-        in_fully_monkey_patched_rspec_environment do
-          obj = Object.new
-          config.mock_with :rspec
-          expect {
-            config.disable_monkey_patching!
-          }.to change { obj.respond_to?(:should_receive) }.from(true).to(false)
-        end
-      end
-
-      it 'stops patching of Marshal' do
-        in_fully_monkey_patched_rspec_environment do
-          expect {
-            config.disable_monkey_patching!
-          }.to change { Marshal.respond_to?(:dump_with_rspec_mocks) }.from(true).to(false)
-        end
-      end
-
-      context 'when user did not configure mock framework' do
-        def emulate_not_configured_mock_framework
-          in_fully_monkey_patched_rspec_environment do
-            allow(config).to receive(:rspec_mocks_loaded?).and_return(false, true)
-            config.instance_variable_set :@mock_framework, nil
-            ExampleGroup.send :remove_class_variable, :@@example_groups_configured
-
-            yield
-          end
-        end
-
-        it 'disables monkey patching after example groups being configured' do
-          emulate_not_configured_mock_framework do
-            obj = Object.new
-            config.disable_monkey_patching!
-
-            expect {
-              ExampleGroup.ensure_example_groups_are_configured
-            }.to change { obj.respond_to?(:should_receive) }.from(true).to(false)
-          end
-        end
-      end
-
-      context 'when user did not configure expectation framework' do
-        def emulate_not_configured_expectation_framework
-          in_fully_monkey_patched_rspec_environment do
-            allow(config).to receive(:rspec_expectations_loaded?).and_return(false, true)
-            config.instance_variable_set :@expectation_frameworks, []
-            ExampleGroup.send :remove_class_variable, :@@example_groups_configured
-
-            yield
-          end
-        end
-
-        it 'disables monkey patching after example groups being configured' do
-          emulate_not_configured_expectation_framework do
-            obj = Object.new
-            config.disable_monkey_patching!
-
-            expect {
-              ExampleGroup.ensure_example_groups_are_configured
-            }.to change { obj.respond_to?(:should) }.from(true).to(false)
-          end
-        end
-      end
-    end
-
     describe 'recording spec start time (for measuring load)' do
       it 'returns a time' do
         expect(config.start_time).to be_an_instance_of ::Time
@@ -2383,10 +2536,6 @@ module RSpec::Core
         config.start_time = 42
         expect(config.start_time).to eq 42
       end
-    end
-
-    describe "hooks" do
-      include_examples "warning of deprecated `:example_group` during filtering configuration", :before, :each
     end
 
     describe '#threadsafe', :threadsafe => true do
@@ -2414,28 +2563,25 @@ module RSpec::Core
       end
     end
 
-    describe "#shared_context_metadata_behavior" do
-      it "defaults to :trigger_inclusion for backwards compatibility" do
-        expect(config.shared_context_metadata_behavior).to eq :trigger_inclusion
+    describe '#failure_exit_code' do
+      it 'defaults to 1' do
+        expect(config.failure_exit_code).to eq 1
       end
 
-      it "can be set to :apply_to_host_groups" do
-        config.shared_context_metadata_behavior = :apply_to_host_groups
-        expect(config.shared_context_metadata_behavior).to eq :apply_to_host_groups
+      it 'is configurable' do
+        config.failure_exit_code = 2
+        expect(config.failure_exit_code).to eq 2
+      end
+    end
+
+    describe '#error_exit_code' do
+      it 'defaults to nil' do
+        expect(config.error_exit_code).to eq nil
       end
 
-      it "can be set to :trigger_inclusion explicitly" do
-        config.shared_context_metadata_behavior = :trigger_inclusion
-        expect(config.shared_context_metadata_behavior).to eq :trigger_inclusion
-      end
-
-      it "cannot be set to any other values" do
-        expect {
-          config.shared_context_metadata_behavior = :another_value
-        }.to raise_error(ArgumentError, a_string_including(
-          "shared_context_metadata_behavior",
-          ":another_value", ":trigger_inclusion", ":apply_to_host_groups"
-        ))
+      it 'is configurable' do
+        config.error_exit_code = 2
+        expect(config.error_exit_code).to eq 2
       end
     end
 

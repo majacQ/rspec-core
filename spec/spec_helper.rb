@@ -1,13 +1,4 @@
-require 'rubygems' if RUBY_VERSION.to_f < 1.9
-
 require 'rspec/support/spec'
-
-if RUBY_PLATFORM == 'java'
-  # Works around https://jira.codehaus.org/browse/JRUBY-5678
-  require 'fileutils'
-  ENV['TMPDIR'] = File.expand_path('../../tmp', __FILE__)
-  FileUtils.mkdir_p(ENV['TMPDIR'])
-end
 
 $rspec_core_without_stderr_monkey_patch = RSpec::Core::Configuration.new
 
@@ -26,9 +17,7 @@ Dir['./spec/support/**/*.rb'].map do |file|
   # that shell out and run a new process.
   next if file =~ /fake_libs/
 
-  # Ensure requires are relative to `spec`, which is on the
-  # load path. This helps prevent double requires on 1.8.7.
-  require file.gsub("./spec/support", "support")
+  require file
 end
 
 class RaiseOnFailuresReporter < RSpec::Core::NullReporter
@@ -84,15 +73,13 @@ RSpec.configure do |c|
   # structural
   c.alias_it_behaves_like_to 'it_has_behavior'
   c.include(RSpecHelpers)
-  c.disable_monkey_patching!
 
   # runtime options
   c.raise_errors_for_deprecations!
-  c.color = true
   c.include CommonHelpers
 
   c.expect_with :rspec do |expectations|
-    expectations.include_chain_clauses_in_custom_matcher_descriptions = true
+    expectations.max_formatted_output_length = 1000
   end
 
   c.mock_with :rspec do |mocks|
@@ -102,17 +89,4 @@ RSpec.configure do |c|
   c.around(:example, :simulate_shell_allowing_unquoted_ids) do |ex|
     with_env_vars('SHELL' => '/usr/local/bin/bash', &ex)
   end
-
-  c.filter_run_excluding :ruby => lambda {|version|
-    case version.to_s
-    when "!jruby"
-      RUBY_ENGINE == "jruby"
-    when /^> (.*)/
-      !(RUBY_VERSION.to_s > $1)
-    else
-      !(RUBY_VERSION.to_s =~ /^#{version.to_s}/)
-    end
-  }
-
-  $original_rspec_configuration = c
 end

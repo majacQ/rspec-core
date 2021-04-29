@@ -65,17 +65,11 @@ module RSpec
         trap_interrupt
         options = ConfigurationOptions.new(args)
 
-        if options.options[:drb]
-          require 'rspec/core/drb'
-          begin
-            DRbRunner.new(options).run(err, out)
-            return
-          rescue DRb::DRbConnError
-            err.puts "No DRb server is running. Running in local process instead ..."
-          end
+        if options.options[:runner]
+          options.options[:runner].call(options, err, out)
+        else
+          new(options).run(err, out)
         end
-
-        new(options).run(err, out)
       end
 
       def initialize(options, configuration=RSpec.configuration, world=RSpec.world)
@@ -90,6 +84,8 @@ module RSpec
       # @param out [IO] output stream
       def run(err, out)
         setup(err, out)
+        return @configuration.reporter.exit_early(exit_code) if RSpec.world.wants_to_quit
+
         run_specs(@world.ordered_example_groups).tap do
           persist_example_statuses
         end
@@ -100,10 +96,11 @@ module RSpec
       # @param err [IO] error stream
       # @param out [IO] output stream
       def setup(err, out)
-        @configuration.error_stream = err
-        @configuration.output_stream = out if @configuration.output_stream == $stdout
-        @options.configure(@configuration)
+        configure(err, out)
+        return if RSpec.world.wants_to_quit
+
         @configuration.load_spec_files
+      ensure
         @world.announce_filters
       end
 
@@ -114,24 +111,25 @@ module RSpec
       #   or the configured failure exit code (1 by default) if specs
       #   failed.
       def run_specs(example_groups)
-        @configuration.reporter.report(@world.example_count(example_groups)) do |reporter|
+        examples_count = @world.example_count(example_groups)
+        examples_passed = @configuration.reporter.report(examples_count) do |reporter|
           @configuration.with_suite_hooks do
-            example_groups.map { |g| g.run(reporter) }.all? ? 0 : @configuration.failure_exit_code
+            if examples_count == 0 && @configuration.fail_if_no_examples
+              return @configuration.failure_exit_code
+            end
+
+            example_groups.map { |g| g.run(reporter) }.all?
           end
         end
+
+        exit_code(examples_passed)
       end
 
-    private
-
-      def persist_example_statuses
-        return unless (path = @configuration.example_status_persistence_file_path)
-
-        ExampleStatusPersister.persist(@world.all_examples, path)
-      rescue SystemCallError => e
-        RSpec.warning "Could not write example statuses to #{path} (configured as " \
-                      "`config.example_status_persistence_file_path`) due to a " \
-                      "system error: #{e.inspect}. Please check that the config " \
-                      "option is set to an accessible, valid file path", :call_site => nil
+      # @private
+      def configure(err, out)
+        @configuration.error_stream = err
+        @configuration.output_stream = out if @configuration.output_stream == $stdout
+        @options.configure(@configuration)
       end
 
       # @private
@@ -186,6 +184,28 @@ module RSpec
           RSpec.world.wants_to_quit = true
           $stderr.puts "\nRSpec is shutting down and will print the summary report... Interrupt again to force quit."
         end
+      end
+
+      # @private
+      def exit_code(examples_passed=false)
+        return @configuration.error_exit_code || @configuration.failure_exit_code if @world.non_example_failure
+        return @configuration.failure_exit_code unless examples_passed
+
+        0
+      end
+
+    private
+
+      def persist_example_statuses
+        return if @configuration.dry_run
+        return unless (path = @configuration.example_status_persistence_file_path)
+
+        ExampleStatusPersister.persist(@world.all_examples, path)
+      rescue SystemCallError => e
+        RSpec.warning "Could not write example statuses to #{path} (configured as " \
+                      "`config.example_status_persistence_file_path`) due to a " \
+                      "system error: #{e.inspect}. Please check that the config " \
+                      "option is set to an accessible, valid file path", :call_site => nil
       end
     end
   end

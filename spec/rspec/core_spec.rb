@@ -13,6 +13,21 @@ RSpec.describe RSpec do
   # JRuby appears to not respect `--disable=gem` so rubygems also gets loaded.
   allowed_loaded_features << /rubygems/ if RSpec::Support::Ruby.jruby?
 
+  disable_autorun_code =
+    if RSpec::Support::OS.windows?
+      # On Windows, the "redefine autorun" approach results in a different
+      # exit status for a reason I don't understand, so we just disable
+      # autorun outright.
+      'RSpec::Core::Runner.disable_autorun!'
+    else
+      # On JRuby, the `disable_autorun!` approach leads to a stderr warning
+      # related to a deprecation emited when `rspec/core/autorun` gets loaded,
+      # because of `caller_filter` issues, so we redefine the autorun method
+      # instead. That works fine on all Rubies when we're not on Windows as
+      # well.
+      'RSpec::Core::Runner.instance_exec { undef :autorun; def autorun; end }'
+    end
+
   it_behaves_like 'library wide checks', 'rspec-core',
     :preamble_for_lib => [
       # rspec-core loads a number of external libraries. We don't want them loaded
@@ -51,18 +66,8 @@ RSpec.describe RSpec do
       # Many files assume this has already been loaded and will have errors if it has not.
       'require "rspec/core"',
       # Prevent rspec/autorun from trying to run RSpec.
-      'RSpec::Core::Runner.disable_autorun!'
-    ], :skip_spec_files => %r{/fake_libs/}, :allowed_loaded_feature_regexps => allowed_loaded_features do
-    if RUBY_VERSION == '1.8.7'
-      before(:example, :description => /(issues no warnings when the spec files are loaded|stdlibs)/) do
-        pending "Not working on #{RUBY_DESCRIPTION}"
-      end
-    elsif RUBY_VERSION == '2.0.0' && RSpec::Support::Ruby.jruby?
-      before(:example) do
-        skip "Not reliably working on #{RUBY_DESCRIPTION}"
-      end
-    end
-  end
+      disable_autorun_code
+    ], :skip_spec_files => %r{/fake_libs/}, :allowed_loaded_feature_regexps => allowed_loaded_features
 
   describe ".configuration" do
     it "returns the same object every time" do
@@ -124,11 +129,22 @@ RSpec.describe RSpec do
       expect(RSpec.configuration).not_to equal(config_before_reset)
       expect(RSpec.world).not_to equal(world_before_reset)
     end
+
+    it 'removes the previously assigned example group constants' do
+        RSpec.describe "group"
+
+        expect {
+          RSpec.world.reset
+        }.to change(RSpec::ExampleGroups, :constants).to([])
+    end
   end
 
   describe ".clear_examples" do
     let(:listener) { double("listener") }
-    let(:reporter) { RSpec.configuration.reporter }
+
+    def reporter
+      RSpec.configuration.reporter
+    end
 
     before do
       RSpec.configuration.output_stream = StringIO.new
@@ -167,6 +183,8 @@ RSpec.describe RSpec do
       reporter.example_pending(pending_ex)
       reporter.finish
 
+      RSpec.clear_examples
+
       reporter.register_listener(listener, :dump_summary)
 
       expect(listener).to receive(:dump_summary) do |notification|
@@ -175,7 +193,6 @@ RSpec.describe RSpec do
         expect(notification.pending_examples).to be_empty
       end
 
-      RSpec.clear_examples
       reporter.start(0)
       reporter.finish
     end
@@ -216,6 +233,40 @@ RSpec.describe RSpec do
         RSpec.configuration.filter_manager.exclusions.rules
       ).to eq(:slow => true)
     end
+
+    it 'clears the deprecation buffer' do
+      RSpec.configuration.deprecation_stream = StringIO.new
+
+      RSpec.describe do
+        example { RSpec.deprecate("first deprecation") }
+      end.run
+
+      reporter.start(1)
+      reporter.finish
+
+      RSpec.clear_examples
+
+      RSpec.configuration.deprecation_stream = StringIO.new(deprecations = "".dup)
+
+      RSpec.describe do
+        example { RSpec.deprecate("second deprecation") }
+      end.run
+
+      reporter.start(1)
+      reporter.finish
+
+      expect(deprecations).to     include("second deprecation")
+      expect(deprecations).to_not include("first deprecation")
+    end
+
+    it 'does not clear shared examples' do
+      RSpec.shared_examples_for("shared") { }
+
+      RSpec.clear_examples
+
+      registry = RSpec.world.shared_example_group_registry
+      expect(registry.find([:main], "shared")).to_not be_nil
+    end
   end
 
   it 'uses only one thread local variable', :run_last do
@@ -228,9 +279,9 @@ RSpec.describe RSpec do
 
   describe "::Core.path_to_executable" do
     it 'returns the absolute location of the exe/rspec file' do
-      expect(File.exist? RSpec::Core.path_to_executable).to be_truthy
+      expect(File.exist? RSpec::Core.path_to_executable).to be(true)
       expect(File.read(RSpec::Core.path_to_executable)).to include("RSpec::Core::Runner.invoke")
-      expect(File.executable? RSpec::Core.path_to_executable).to be_truthy unless RSpec::Support::OS.windows?
+      expect(File.executable? RSpec::Core.path_to_executable).to be(true) unless RSpec::Support::OS.windows?
     end
   end
 

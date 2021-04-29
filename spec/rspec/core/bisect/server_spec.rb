@@ -14,8 +14,6 @@ module RSpec::Core
     end
 
     it 'always stops the server, even if an error occurs while yielding' do
-      skip "This test flaps on JRuby 1.8 mode for some reason" if RSpec::Support::Ruby.jruby? && RUBY_VERSION.to_f < 1.9
-
       expect(DRb).not_to have_running_server
 
       expect {
@@ -41,7 +39,7 @@ module RSpec::Core
       end
     end
 
-    context "when used in combination with the BisectFormatter", :slow do
+    context "when used in combination with the BisectDRbFormatter", :slow do
       include FormatterSupport
 
       attr_reader :server
@@ -55,7 +53,7 @@ module RSpec::Core
 
       def run_formatter_specs
         RSpec.configuration.drb_port = server.drb_port
-        run_rspec_with_formatter("bisect")
+        run_rspec_with_formatter("bisect-drb")
       end
 
       it 'receives suite results' do
@@ -69,7 +67,9 @@ module RSpec::Core
             ./spec/rspec/core/resources/formatter_specs.rb[2:1:1]
             ./spec/rspec/core/resources/formatter_specs.rb[2:2:1]
             ./spec/rspec/core/resources/formatter_specs.rb[3:1]
+            ./spec/rspec/core/resources/formatter_specs.rb[3:2]
             ./spec/rspec/core/resources/formatter_specs.rb[4:1]
+            ./spec/rspec/core/resources/formatter_specs.rb[4:2]
             ./spec/rspec/core/resources/formatter_specs.rb[5:1]
             ./spec/rspec/core/resources/formatter_specs.rb[5:2]
             ./spec/rspec/core/resources/formatter_specs.rb[5:3:1]
@@ -78,6 +78,7 @@ module RSpec::Core
           expect(results.failed_example_ids).to eq %w[
             ./spec/rspec/core/resources/formatter_specs.rb[2:2:1]
             ./spec/rspec/core/resources/formatter_specs.rb[4:1]
+            ./spec/rspec/core/resources/formatter_specs.rb[4:2]
             ./spec/rspec/core/resources/formatter_specs.rb[5:1]
             ./spec/rspec/core/resources/formatter_specs.rb[5:2]
             ./spec/rspec/core/resources/formatter_specs.rb[5:3:1]
@@ -102,6 +103,7 @@ module RSpec::Core
               ./spec/rspec/core/resources/formatter_specs.rb[2:1:1]
               ./spec/rspec/core/resources/formatter_specs.rb[2:2:1]
               ./spec/rspec/core/resources/formatter_specs.rb[3:1]
+              ./spec/rspec/core/resources/formatter_specs.rb[3:2]
               ./spec/rspec/core/resources/formatter_specs.rb[4:1]
             ],
             :failed_example_ids => %w[

@@ -39,8 +39,6 @@ module RSpec
         # `examples` will be empty.
         return examples if examples.empty?
 
-        examples = prune_conditionally_filtered_examples(examples)
-
         if inclusions.standalone?
           examples.select { |e| inclusions.include_example?(e) }
         else
@@ -48,7 +46,7 @@ module RSpec
 
           examples.select do |ex|
             file_scoped_include?(ex.metadata, ids, locations) do
-              !exclusions.include_example?(ex) && non_scoped_inclusions.include_example?(ex)
+              (exclusions.empty? || !exclusions.include_example?(ex)) && non_scoped_inclusions.include_example?(ex)
             end
           end
         end
@@ -86,13 +84,6 @@ module RSpec
         inclusions.add(filter_key => filter)
       end
 
-      def prune_conditionally_filtered_examples(examples)
-        examples.reject do |ex|
-          meta = ex.metadata
-          !meta.fetch(:if, true) || meta[:unless]
-        end
-      end
-
       # When a user specifies a particular spec location, that takes priority
       # over any exclusion filters (such as if the spec is tagged with `:slow`
       # and there is a `:slow => true` exclusion filter), but only for specs
@@ -113,7 +104,7 @@ module RSpec
 
     # @private
     class FilterRules
-      PROC_HEX_NUMBER = /0x[0-9a-f]+@/
+      PROC_HEX_NUMBER = /0x[0-9a-f]+@?/
       PROJECT_DIR = File.expand_path('.')
 
       attr_accessor :opposite
@@ -175,7 +166,7 @@ module RSpec
       end
 
       def include_example?(example)
-        MetadataFilter.apply?(:any?, @rules, example.metadata)
+        MetadataFilter.apply?(@rules, example.metadata)
       end
     end
 

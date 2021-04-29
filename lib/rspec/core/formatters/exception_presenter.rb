@@ -1,5 +1,6 @@
-# encoding: utf-8
+RSpec::Support.require_rspec_core "formatters/console_codes"
 RSpec::Support.require_rspec_core "formatters/snippet_extractor"
+RSpec::Support.require_rspec_core 'formatters/syntax_highlighter'
 RSpec::Support.require_rspec_support "encoded_string"
 
 module RSpec
@@ -39,31 +40,25 @@ module RSpec
             formatted_cause(exception)
         end
 
-        if RSpec::Support::RubyFeatures.supports_exception_cause?
-          def formatted_cause(exception)
-            last_cause = final_exception(exception)
-            cause = []
+        def formatted_cause(exception)
+          last_cause = final_exception(exception, [exception])
+          cause = []
 
-            if exception.cause
-              cause << '------------------'
-              cause << '--- Caused by: ---'
-              cause << "#{exception_class_name(last_cause)}:" unless exception_class_name(last_cause) =~ /RSpec/
+          if exception.cause
+            cause << '------------------'
+            cause << '--- Caused by: ---'
+            cause << "#{exception_class_name(last_cause)}:" unless exception_class_name(last_cause) =~ /RSpec/
 
-              encoded_string(last_cause.message.to_s).split("\n").each do |line|
-                cause << "  #{line}"
-              end
-
-              cause << ("  #{backtrace_formatter.format_backtrace(last_cause.backtrace, example.metadata).first}")
+            encoded_string(exception_message_string(last_cause)).split("\n").each do |line|
+              cause << "  #{line}"
             end
 
-            cause
+            unless last_cause.backtrace.empty?
+              cause << ("  #{backtrace_formatter.format_backtrace(last_cause.backtrace, example.metadata).first}")
+            end
           end
-        else
-          # :nocov:
-          def formatted_cause(_)
-            []
-          end
-          # :nocov:
+
+          cause
         end
 
         def colorized_formatted_backtrace(colorizer=::RSpec::Core::Formatters::ConsoleCodes)
@@ -79,7 +74,7 @@ module RSpec
 
         def fully_formatted_lines(failure_number, colorizer)
           lines = [
-            description,
+            encoded_description(description),
             detail_formatter.call(example, colorizer),
             formatted_message_and_backtrace(colorizer),
             extra_detail_formatter.call(failure_number, colorizer),
@@ -94,7 +89,8 @@ module RSpec
 
         def final_exception(exception, previous=[])
           cause = exception.cause
-          if cause && !previous.include?(cause)
+
+          if cause && Exception === cause && !previous.include?(cause)
             previous << cause
             final_exception(cause, previous)
           else
@@ -102,27 +98,17 @@ module RSpec
           end
         end
 
-        if String.method_defined?(:encoding)
-          def encoding_of(string)
-            string.encoding
-          end
+        def encoding_of(string)
+          string.encoding
+        end
 
-          def encoded_string(string)
-            RSpec::Support::EncodedString.new(string, Encoding.default_external)
-          end
-        else # for 1.8.7
-          # :nocov:
-          def encoding_of(_string)
-          end
-
-          def encoded_string(string)
-            RSpec::Support::EncodedString.new(string)
-          end
-          # :nocov:
+        def encoded_string(string)
+          RSpec::Support::EncodedString.new(string, Encoding.default_external)
         end
 
         def indent_lines(lines, failure_number)
-          alignment_basis = "#{' ' * @indentation}#{failure_number}) "
+          alignment_basis = ' ' * @indentation
+          alignment_basis <<  "#{failure_number}) " if failure_number
           indentation = ' ' * alignment_basis.length
 
           lines.each_with_index.map do |line, index|
@@ -168,13 +154,23 @@ module RSpec
           lines
         end
 
+        # rubocop:disable Lint/RescueException
+        def exception_message_string(exception)
+          exception.message.to_s
+        rescue Exception => other
+          "A #{exception.class} for which `exception.message.to_s` raises #{other.class}."
+        end
+        # rubocop:enable Lint/RescueException
+
         def exception_lines
-          lines = []
-          lines << "#{exception_class_name}:" unless exception_class_name =~ /RSpec/
-          encoded_string(exception.message.to_s).split("\n").each do |line|
-            lines << (line.empty? ? line : "  #{line}")
+          @exception_lines ||= begin
+            lines = []
+            lines << "#{exception_class_name}:" unless exception_class_name =~ /RSpec/
+            encoded_string(exception_message_string(exception)).split("\n").each do |line|
+              lines << (line.empty? ? line : "  #{line}")
+            end
+            lines
           end
-          lines
         end
 
         def extra_failure_lines
@@ -213,7 +209,7 @@ module RSpec
           file_path, line_number = file_and_line_number[1..2]
           max_line_count = RSpec.configuration.max_displayed_failure_line_count
           lines = SnippetExtractor.extract_expression_lines_at(file_path, line_number.to_i, max_line_count)
-          RSpec.world.source_cache.syntax_highlighter.highlight(lines)
+          RSpec.world.syntax_highlighter.highlight(lines)
         rescue SnippetExtractor::NoSuchFileError
           ["Unable to find #{file_path} to read failed line"]
         rescue SnippetExtractor::NoSuchLineError
@@ -239,6 +235,11 @@ module RSpec
           lines.map do |line|
             RSpec::Support::EncodedString.new(line, encoding)
           end
+        end
+
+        def encoded_description(description)
+          return if description.nil?
+          encoded_string(description)
         end
 
         def exception_backtrace
@@ -277,7 +278,7 @@ module RSpec
                 :description   => "#{@example.full_description} FIXED",
                 :message_color => RSpec.configuration.fixed_color,
                 :failure_lines => [
-                  "Expected pending '#{@execution_result.pending_message}' to fail. No Error was raised."
+                  "Expected pending '#{@execution_result.pending_message}' to fail. No error was raised."
                 ]
               }
             elsif @execution_result.status == :pending
@@ -333,7 +334,7 @@ module RSpec
             common_backtrace_truncater = CommonBacktraceTruncater.new(exception)
 
             lambda do |failure_number, colorizer|
-              FlatMap.flat_map(exception.all_exceptions.each_with_index) do |failure, index|
+              exception.all_exceptions.each_with_index.flat_map do |failure, index|
                 options = with_multiple_error_options_as_needed(
                   failure,
                   :description             => nil,
@@ -344,7 +345,10 @@ module RSpec
 
                 failure   = common_backtrace_truncater.with_truncated_backtrace(failure)
                 presenter = ExceptionPresenter.new(failure, @example, options)
-                presenter.fully_formatted_lines("#{failure_number}.#{index + 1}", colorizer)
+                presenter.fully_formatted_lines(
+                  "#{failure_number ? "#{failure_number}." : ''}#{index + 1}",
+                  colorizer
+                )
               end
             end
           end
@@ -373,6 +377,7 @@ module RSpec
                 parent_bt[index] != child_bt[index]
               end
 
+              return child if index_before_first_common_frame.nil?
               return child if index_before_first_common_frame == -1
 
               child = child.dup

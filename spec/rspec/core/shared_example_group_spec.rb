@@ -40,10 +40,6 @@ module RSpec
         describe shared_method_name do
           let(:group) { RSpec.describe('example group') }
 
-          before do
-            RSpec.configuration.shared_context_metadata_behavior = :apply_to_host_groups
-          end
-
           define_method :define_shared_group do |*args, &block|
             group.send(shared_method_name, *args, &block)
           end
@@ -56,20 +52,67 @@ module RSpec
             registry.find([scope], name).definition
           end
 
-          it "is exposed to the global namespace when expose_dsl_globally is enabled" do
-            in_sub_process do
-              RSpec.configuration.expose_dsl_globally = true
-              expect(Kernel).to respond_to(shared_method_name)
-            end
-          end
-
-          it "is not exposed to the global namespace when monkey patching is disabled" do
-            RSpec.configuration.expose_dsl_globally = false
-            expect(RSpec.configuration.expose_dsl_globally?).to eq(false)
+          it "is not exposed to the global namespace" do
             expect(Kernel).to_not respond_to(shared_method_name)
           end
 
-          it "displays a warning when adding a second shared example group with the same name" do
+          # These keyword specs cover all 4 of the keyword / keyword like syntax varients
+          # they should be warning free.
+          it 'supports required keyword arguments' do
+            group.__send__ shared_method_name, "shared context expects keywords" do |foo:|
+              it "has an expected value" do
+                expect(foo).to eq("bar")
+              end
+            end
+
+            group.__send__ shared_method_name, "shared context expects hash" do |a_hash|
+              it "has an expected value" do
+                expect(a_hash[:foo]).to eq("bar")
+              end
+            end
+
+            group.it_behaves_like "shared context expects keywords", foo: "bar"
+            group.it_behaves_like "shared context expects keywords", { foo: "bar" }
+
+            group.it_behaves_like "shared context expects hash", foo: "bar"
+            group.it_behaves_like "shared context expects hash", { foo: "bar" }
+
+            expect(group.run).to eq true
+          end
+
+          it 'supports optional keyword arguments' do
+            group.__send__ shared_method_name, "shared context expects keywords" do |foo: nil|
+              it "has an expected value" do
+                expect(foo).to eq("bar")
+              end
+            end
+
+            group.__send__ shared_method_name, "shared context expects hash" do |a_hash|
+              it "has an expected value" do
+                expect(a_hash[:foo]).to eq("bar")
+              end
+            end
+
+            group.it_behaves_like "shared context expects keywords", foo: "bar"
+            group.it_behaves_like "shared context expects keywords", { foo: "bar" }
+
+            group.it_behaves_like "shared context expects hash", foo: "bar"
+            group.it_behaves_like "shared context expects hash", { foo: "bar" }
+
+            expect(group.run).to eq true
+          end
+
+          it "displays a warning when adding an example group without a block" do
+            expect_warning_with_call_site(__FILE__, __LINE__ + 1)
+            group.send(shared_method_name, 'name but no block')
+          end
+
+          it "displays a warning when adding an example group without a block" do
+            expect_warning_with_call_site(__FILE__, __LINE__ + 1)
+            group.send(shared_method_name, 'name but no block')
+          end
+
+          it 'displays a warning when adding a second shared example group with the same name' do
             group.send(shared_method_name, 'some shared group') {}
             original_declaration = [__FILE__, __LINE__ - 1].join(':')
 
@@ -79,6 +122,22 @@ module RSpec
             group.send(shared_method_name, 'some shared group') {}
             second_declaration = [__FILE__, __LINE__ - 1].join(':')
             expect(warning).to include('some shared group', original_declaration, second_declaration)
+            expect(warning).to_not include 'Called from'
+          end
+
+          it 'displays a helpful message when you define a shared example group in *_spec.rb file' do
+            warning = nil
+            allow(::Kernel).to receive(:warn) { |msg| warning = msg }
+            declaration = nil
+
+            2.times do
+              group.send(shared_method_name, 'some shared group') {}
+              declaration = [__FILE__, __LINE__ - 1].join(':')
+              RSpec.configuration.loaded_spec_files << declaration
+            end
+
+            better_error = 'was automatically loaded by RSpec because the file name'
+            expect(warning).to include('some shared group', declaration, better_error)
             expect(warning).to_not include 'Called from'
           end
 
@@ -116,62 +175,7 @@ module RSpec
             end
           end
 
-          context "when `config.shared_context_metadata_behavior == :trigger_inclusion`" do
-            before do
-              RSpec.configuration.shared_context_metadata_behavior = :trigger_inclusion
-            end
-
-            context "given a hash" do
-              it "includes itself in matching example groups" do
-                implementation = Proc.new { def self.bar; 'bar'; end }
-                define_shared_group(:foo => :bar, &implementation)
-
-                matching_group = RSpec.describe "Group", :foo => :bar
-                non_matching_group = RSpec.describe "Group"
-
-                expect(matching_group.bar).to eq("bar")
-                expect(non_matching_group).not_to respond_to(:bar)
-              end
-            end
-
-            context "given a string and a hash" do
-              it "captures the given string and block in the World's collection of shared example groups" do
-                implementation = lambda { }
-                define_shared_group("name", :foo => :bar, &implementation)
-                expect(find_implementation_block(registry, group, "name")).to eq implementation
-              end
-
-              it "delegates include on configuration" do
-                implementation = Proc.new { def self.bar; 'bar'; end }
-                define_shared_group("name", :foo => :bar, &implementation)
-
-                matching_group = RSpec.describe "Group", :foo => :bar
-                non_matching_group = RSpec.describe "Group"
-
-                expect(matching_group.bar).to eq("bar")
-                expect(non_matching_group).not_to respond_to(:bar)
-              end
-            end
-
-            it "displays a warning when adding a second shared example group with the same name" do
-              group.send(shared_method_name, 'some shared group') {}
-              original_declaration = [__FILE__, __LINE__ - 1].join(':')
-
-              warning = nil
-              allow(::Kernel).to receive(:warn) { |msg| warning = msg }
-
-              group.send(shared_method_name, 'some shared group') {}
-              second_declaration = [__FILE__, __LINE__ - 1].join(':')
-              expect(warning).to include('some shared group', original_declaration, second_declaration)
-              expect(warning).to_not include 'Called from'
-            end
-          end
-
-          context "when `config.shared_context_metadata_behavior == :apply_to_host_groups`" do
-            before do
-              RSpec.configuration.shared_context_metadata_behavior = :apply_to_host_groups
-            end
-
+          describe "metadata" do
             it "does not auto-include the shared group based on passed metadata" do
               define_top_level_shared_group("name", :foo => :bar) do
                 def self.bar; 'bar'; end
@@ -198,21 +202,83 @@ module RSpec
 
             it "requires a valid name" do
               expect {
-                define_shared_group(:foo => 1)
+                define_shared_group(:foo => 1) { }
               }.to raise_error(ArgumentError, a_string_including(
                 "Shared example group names",
                 {:foo => 1}.inspect
               ))
             end
+
+            it "does not overwrite existing metadata values set at that level when included via `include_context`" do
+              shared_ex_metadata = nil
+              host_ex_metadata = nil
+
+              define_top_level_shared_group("name", :foo => :shared) do
+                it { |ex| shared_ex_metadata = ex.metadata }
+              end
+
+              describe_successfully("Group", :foo => :host) do
+                include_context "name"
+                it { |ex| host_ex_metadata = ex.metadata }
+              end
+
+              expect(host_ex_metadata[:foo]).to eq :host
+              expect(shared_ex_metadata[:foo]).to eq :host
+            end
+
+            it "overwrites existing metadata values set at a parent level when included via `include_context`" do
+              shared_ex_metadata = nil
+              host_ex_metadata = nil
+
+              define_top_level_shared_group("name", :foo => :shared) do
+                it { |ex| shared_ex_metadata = ex.metadata }
+              end
+
+              describe_successfully("Group", :foo => :host) do
+                context "nested" do
+                  include_context "name"
+                  it { |ex| host_ex_metadata = ex.metadata }
+                end
+              end
+
+              expect(host_ex_metadata[:foo]).to eq :shared
+              expect(shared_ex_metadata[:foo]).to eq :shared
+            end
+
+            it "propagates conflicted metadata to examples defined in the shared group when included via `it_behaves_like` since it makes a nested group" do
+              shared_ex_metadata = nil
+              host_ex_metadata = nil
+
+              define_top_level_shared_group("name", :foo => :shared) do
+                it { |ex| shared_ex_metadata = ex.metadata }
+              end
+
+              describe_successfully("Group", :foo => :host) do
+                it_behaves_like "name"
+                it { |ex| host_ex_metadata = ex.metadata }
+              end
+
+              expect(host_ex_metadata[:foo]).to eq :host
+              expect(shared_ex_metadata[:foo]).to eq :shared
+            end
+
+            it "applies metadata from the shared group to the including group, when the shared group itself is loaded and included via metadata" do
+              RSpec.configure do |config|
+                config.when_first_matching_example_defined(:controller) do
+                  define_top_level_shared_group("controller support", :capture_logging) { }
+
+                  config.include_context "controller support", :controller
+                end
+              end
+
+              group = RSpec.describe("group", :controller)
+              ex = group.it
+
+              expect(ex.metadata).to include(:controller => true, :capture_logging => true)
+            end
           end
 
           context "when the group is included via `config.include_context` and matching metadata" do
-            before do
-              # To ensure we don't accidentally include shared contexts the
-              # old way in this context, we disable the option here.
-              RSpec.configuration.shared_context_metadata_behavior = :apply_to_host_groups
-            end
-
             describe "when it has a `let` and applies to an individual example via metadata" do
               it 'defines the `let` method correctly' do
                 define_top_level_shared_group("name") do
@@ -231,14 +297,6 @@ module RSpec
             end
 
             describe "hooks for individual examples that have matching metadata" do
-              before do
-                skip "These specs pass in 2.0 mode on JRuby 1.7.8 but fail on " \
-                     "1.7.15 when the entire spec suite runs. They pass on " \
-                     "1.7.15 when this one spec file is run or if we filter to " \
-                     "just them. Given that 2.0 support on JRuby 1.7 is " \
-                     "experimental, we're just skipping these specs."
-              end if RUBY_VERSION == "2.0.0" && RSpec::Support::Ruby.jruby?
-
               it 'runs them' do
                 sequence = []
 
@@ -451,4 +509,3 @@ module RSpec
     end
   end
 end
-
