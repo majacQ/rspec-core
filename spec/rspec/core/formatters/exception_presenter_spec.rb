@@ -11,7 +11,22 @@ module RSpec::Core
     before do
       allow(example.execution_result).to receive(:exception) { exception }
       example.metadata[:absolute_file_path] = __FILE__
-      allow(exception).to receive(:cause) if RSpec::Support::RubyFeatures.supports_exception_cause?
+    end
+
+    # This is a slightly more realistic exception than our instance_double
+    # created, as this will behave correctly with `Exception#===`, note we
+    # monkey patch the backtrace / cause in because these are not public
+    # api but we need specific values for our fakes.
+    class FakeException < Exception
+      def initialize(message, backtrace = [], cause = nil)
+        super(message)
+        @backtrace = backtrace
+        @cause = cause
+      end
+      attr_reader :backtrace
+      if RSpec::Support::RubyFeatures.supports_exception_cause?
+        attr_accessor :cause
+      end
     end
 
     describe "#fully_formatted" do
@@ -25,7 +40,7 @@ module RSpec::Core
         line_num = __LINE__ + 1
         # The failure happened here! Handles encoding too! ЙЦ
       end
-      let(:exception) { instance_double(Exception, :message => "Boom\nBam", :backtrace => [ "#{__FILE__}:#{line_num}"]) }
+      let(:exception) { FakeException.new("Boom\nBam", [ "#{__FILE__}:#{line_num}"]) }
 
       it "formats the exception with all the normal details" do
         expect(presenter.fully_formatted(1)).to eq(<<-EOS.gsub(/^ +\|/, ''))
@@ -159,16 +174,14 @@ module RSpec::Core
         EOS
       end
 
-      let(:the_exception) { instance_double(Exception, :cause => second_exception, :message => "Boom\nBam", :backtrace => [ "#{__FILE__}:#{line_num}"]) }
+      let(:the_exception) { FakeException.new("Boom\nBam", [ "#{__FILE__}:#{line_num}"], second_exception) }
 
       let(:second_exception) do
-        instance_double(Exception, :cause => first_exception, :message => "Second\nexception", :backtrace => ["#{__FILE__}:#{__LINE__}"])
+        FakeException.new("Second\nexception", ["#{__FILE__}:#{__LINE__}"], first_exception)
       end
 
-      caused_by_line_num = __LINE__ + 2
-      let(:first_exception) do
-        instance_double(Exception, :cause => nil, :message => "Real\nculprit", :backtrace => ["#{__FILE__}:#{__LINE__}"])
-      end
+      caused_by_line_num = __LINE__ + 1
+      let(:first_exception) { FakeException.new("Real\nculprit", ["#{__FILE__}:#{__LINE__}"]) }
 
       it 'includes the first exception that caused the failure', :if => RSpec::Support::RubyFeatures.supports_exception_cause? do
         the_presenter = Formatters::ExceptionPresenter.new(the_exception, example)
@@ -211,8 +224,9 @@ module RSpec::Core
 
       it 'wont produce a stack error when the cause is an older exception', :if => RSpec::Support::RubyFeatures.supports_exception_cause? do
         allow(the_exception).to receive(:cause) do
-          instance_double(Exception, :cause => the_exception, :message => "A loop", :backtrace => the_exception.backtrace)
+          FakeException.new("A loop", the_exception.backtrace, the_exception)
         end
+
         the_presenter = Formatters::ExceptionPresenter.new(the_exception, example)
 
         expect(the_presenter.fully_formatted(1)).to eq(<<-EOS.gsub(/^ +\|/, ''))
@@ -227,6 +241,48 @@ module RSpec::Core
           |     # --- Caused by: ---
           |     #   A loop
           |     #   ./spec/rspec/core/formatters/exception_presenter_spec.rb:#{line_num}
+        EOS
+      end
+
+      it 'will work when cause is incorrectly overridden', :if => RSpec::Support::RubyFeatures.supports_exception_cause? do
+        incorrect_cause_exception = FakeException.new("A badly implemented exception", [], "An incorrect cause")
+
+        the_presenter = Formatters::ExceptionPresenter.new(incorrect_cause_exception, example)
+
+        expect(the_presenter.fully_formatted(1)).to eq(<<-EOS.gsub(/^ +\|/, ''))
+          |
+          |  1) Example
+          |     Failure/Error: Unable to find matching line from backtrace
+          |       A badly implemented exception
+          |     # ------------------
+          |     # --- Caused by: ---
+          |     #   A badly implemented exception
+        EOS
+      end
+
+      it 'will work then the message to_s raises a looped exception' do
+        raising_to_s_klass =
+          Class.new do
+            def to_s
+              raise StandardError, self
+            end
+          end
+
+        if RSpec::Support::Ruby.jruby?
+          expected_error = Java::JavaLang::StackOverflowError
+        else
+          expected_error = StandardError
+        end
+
+        incorrect_message_exception = FakeException.new(raising_to_s_klass.new, [])
+
+        the_presenter = Formatters::ExceptionPresenter.new(incorrect_message_exception, example)
+
+        expect(the_presenter.fully_formatted(1)).to eq(<<-EOS.gsub(/^ +\|/, ''))
+          |
+          |  1) Example
+          |     Failure/Error: Unable to find matching line from backtrace
+          |       A #{FakeException} for which `exception.message.to_s` raises #{expected_error}.
         EOS
       end
 
@@ -453,7 +509,9 @@ module RSpec::Core
 
         context 'and the line count does not exceed RSpec.configuration.max_displayed_failure_line_count' do
           it 'returns all the lines' do
-            pending 'https://github.com/jruby/jruby/issues/4737' if RSpec::Support::Ruby.jruby_9000?
+            if RSpec::Support::Ruby.jruby_9000? && RSpec::Support::Ruby.jruby_version < '9.2.0.0'
+              pending 'https://github.com/jruby/jruby/issues/4737'
+            end
             expect(read_failed_lines).to eq([
               "            expect('RSpec').to be_a(String).",
               "                           and start_with('R').",
@@ -468,7 +526,9 @@ module RSpec::Core
           end
 
           it 'returns the lines without exceeding the max count' do
-            pending 'https://github.com/jruby/jruby/issues/4737' if RSpec::Support::Ruby.jruby_9000?
+            if RSpec::Support::Ruby.jruby_9000? && RSpec::Support::Ruby.jruby_version < '9.2.0.0'
+              pending 'https://github.com/jruby/jruby/issues/4737'
+            end
             expect(read_failed_lines).to eq([
               "            expect('RSpec').to be_a(String).",
               "                           and start_with('R')."

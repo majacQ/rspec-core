@@ -6,7 +6,7 @@ module RSpec
   module Core
     module Bisect
       # A Bisect runner that runs requested subsets of the suite by forking
-      # sub-processes. The master process bootstraps RSpec and the application
+      # sub-processes. The main process bootstraps RSpec and the application
       # environment (including preloading files specified via `--require`) so
       # that the individual spec runs do not have to re-pay that cost.  Each
       # spec run happens in a forked process, ensuring that the spec files are
@@ -92,7 +92,11 @@ module RSpec
 
           def dispatch_specs(run_descriptor)
             pid = fork { run_specs(run_descriptor) }
-            Process.waitpid(pid)
+            # We don't use Process.waitpid here as it was causing bisects to
+            # block due to the file descriptor limit on OSX / Linux. We need
+            # to detach the process to avoid having zombie processes
+            # consuming slots in the kernel process table during bisect runs.
+            Process.detach(pid)
           end
 
         private

@@ -89,7 +89,7 @@ module RSpec::Core
         it 'sets the `:drb` option to true' do
           options = parser.parse
 
-          expect(options[:drb]).to be_truthy
+          expect(options[:drb]).to be(true)
         end
 
         it 'sets the `:runner` option with the `DrbWithFallback` invocation' do
@@ -216,6 +216,16 @@ module RSpec::Core
       end
     end
 
+    %w[--example-matches -E].each do |option|
+      describe option do
+        it "does not escape the arg" do
+          options = Parser.parse([option, 'this (and that)\b'])
+          expect(options[:full_description].length).to eq(1)
+          expect(/this (and that)\b/).to eq(options[:full_description].first)
+        end
+      end
+    end
+
     %w[--pattern -P].each do |option|
       describe option do
         it "sets the filename pattern" do
@@ -329,7 +339,7 @@ module RSpec::Core
       it "sets the `:bisect` option" do
         options = Parser.parse(%w[ --bisect ])
 
-        expect(options[:bisect]).to be_truthy
+        expect(options[:bisect]).to be(true)
       end
 
       it "sets the `:runner` option with the `Bisect` invocation" do

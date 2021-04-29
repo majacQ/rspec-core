@@ -26,10 +26,10 @@ RSpec.describe RSpec::SharedContext do
 
     group.run
 
-    expect(before_all_hook).to be_truthy
-    expect(before_each_hook).to be_truthy
-    expect(after_each_hook).to be_truthy
-    expect(after_all_hook).to be_truthy
+    expect(before_all_hook).to be(true)
+    expect(before_each_hook).to be(true)
+    expect(after_each_hook).to be(true)
+    expect(after_all_hook).to be(true)
   end
 
   include RSpec::Core::SharedExampleGroup::TopLevelDSL
@@ -64,6 +64,19 @@ RSpec.describe RSpec::SharedContext do
     end
 
     expect(group.new.foo).to eq('foo')
+  end
+
+  it 'supports overriding let without warnings' do
+    shared = Module.new do
+      extend RSpec::SharedContext
+      let(:foo) { 'foo' }
+    end
+    group = RSpec.describe do
+      include shared
+      let(:foo) { 'bar' }
+    end
+
+    expect(group.new.foo).to eq('bar')
   end
 
   it "supports let when applied to an individual example via metadata" do

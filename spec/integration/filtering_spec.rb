@@ -2,7 +2,7 @@ require 'support/aruba_support'
 
 RSpec.describe 'Filtering' do
   include_context "aruba support"
-  before { clean_current_dir }
+  before { setup_aruba }
 
   it 'prints a rerun command for shared examples in external files that works to rerun' do
     write_file "spec/support/shared_examples.rb", "
@@ -66,6 +66,49 @@ RSpec.describe 'Filtering' do
   end
 
   context "passing a line-number filter" do
+    it "works with different custom runners used in the same process" do
+      result_counter = Class.new do
+        RSpec::Core::Formatters.register(self, :example_passed)
+
+        attr_accessor :passed_examples
+
+        def initialize(*)
+          @passed_examples = 0
+        end
+
+        def example_passed(notification)
+          @passed_examples += 1
+        end
+      end
+
+      spec_file = "spec/filtering_custom_runner_spec.rb"
+
+      write_file_formatted spec_file, "
+        RSpec.describe 'A group' do
+          example('ex 1') { }
+          example('ex 2') { }
+        end
+      "
+
+      spec_file_path = expand_path(spec_file)
+
+      formatter = result_counter.new
+      RSpec.configuration.add_formatter(formatter)
+      opts = RSpec::Core::ConfigurationOptions.new(["#{spec_file_path}[1:1]"])
+      RSpec::Core::Runner.new(opts).run(StringIO.new, StringIO.new)
+
+      expect(formatter.passed_examples).to eq 1
+
+      RSpec.clear_examples
+
+      formatter = result_counter.new
+      RSpec.configuration.add_formatter(formatter)
+      opts = RSpec::Core::ConfigurationOptions.new(["#{spec_file_path}[1:2]"])
+      RSpec::Core::Runner.new(opts).run(StringIO.new, StringIO.new)
+
+      expect(formatter.passed_examples).to eq 1
+    end
+
     it "trumps exclusions, except for :if/:unless (which are absolute exclusions)" do
       write_file_formatted 'spec/a_spec.rb', "
         RSpec.configure do |c|
@@ -205,7 +248,7 @@ RSpec.describe 'Filtering' do
       expect(last_cmd_stdout).to match(/3 examples, 0 failures/)
 
       # Using absolute paths...
-      spec_root = in_current_dir { File.expand_path("spec") }
+      spec_root = cd('.') { File.expand_path("spec") }
       run_command "#{spec_root}/file_1_spec.rb[1:1,1:3] #{spec_root}/file_2_spec.rb[1:2]"
       expect(last_cmd_stdout).to match(/3 examples, 0 failures/)
     end

@@ -69,6 +69,59 @@ module RSpec
             expect(Kernel).to_not respond_to(shared_method_name)
           end
 
+          # These keyword specs cover all 4 of the keyword / keyword like syntax varients
+          # they should be warning free.
+
+          if RSpec::Support::RubyFeatures.required_kw_args_supported?
+            it 'supports required keyword arguments' do
+              binding.eval(<<-CODE, __FILE__, __LINE__)
+              group.__send__ shared_method_name, "shared context expects keywords" do |foo:|
+                it "has an expected value" do
+                  expect(foo).to eq("bar")
+                end
+              end
+
+              group.__send__ shared_method_name, "shared context expects hash" do |a_hash|
+                it "has an expected value" do
+                  expect(a_hash[:foo]).to eq("bar")
+                end
+              end
+
+              group.it_behaves_like "shared context expects keywords", foo: "bar"
+              group.it_behaves_like "shared context expects keywords", { foo: "bar" }
+
+              group.it_behaves_like "shared context expects hash", foo: "bar"
+              group.it_behaves_like "shared context expects hash", { foo: "bar" }
+              CODE
+              expect(group.run).to eq true
+            end
+          end
+
+          if RSpec::Support::RubyFeatures.kw_args_supported?
+            it 'supports optional keyword arguments' do
+              binding.eval(<<-CODE, __FILE__, __LINE__)
+              group.__send__ shared_method_name, "shared context expects keywords" do |foo: nil|
+                it "has an expected value" do
+                  expect(foo).to eq("bar")
+                end
+              end
+
+              group.__send__ shared_method_name, "shared context expects hash" do |a_hash|
+                it "has an expected value" do
+                  expect(a_hash[:foo]).to eq("bar")
+                end
+              end
+
+              group.it_behaves_like "shared context expects keywords", foo: "bar"
+              group.it_behaves_like "shared context expects keywords", { foo: "bar" }
+
+              group.it_behaves_like "shared context expects hash", foo: "bar"
+              group.it_behaves_like "shared context expects hash", { foo: "bar" }
+              CODE
+              expect(group.run).to eq true
+            end
+          end
+
           it "displays a warning when adding an example group without a block", :unless => RUBY_VERSION == '1.8.7' do
             expect_warning_with_call_site(__FILE__, __LINE__ + 1)
             group.send(shared_method_name, 'name but no block')
@@ -285,6 +338,21 @@ module RSpec
 
               expect(host_ex_metadata[:foo]).to eq :host
               expect(shared_ex_metadata[:foo]).to eq :shared
+            end
+
+            it "applies metadata from the shared group to the including group, when the shared group itself is loaded and included via metadata" do
+              RSpec.configure do |config|
+                config.when_first_matching_example_defined(:controller) do
+                  define_top_level_shared_group("controller support", :capture_logging) { }
+
+                  config.include_context "controller support", :controller
+                end
+              end
+
+              group = RSpec.describe("group", :controller)
+              ex = group.it
+
+              expect(ex.metadata).to include(:controller => true, :capture_logging => true)
             end
           end
 

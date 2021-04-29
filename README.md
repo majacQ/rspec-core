@@ -1,4 +1,4 @@
-# rspec-core [![Build Status](https://secure.travis-ci.org/rspec/rspec-core.svg?branch=master)](http://travis-ci.org/rspec/rspec-core) [![Code Climate](https://codeclimate.com/github/rspec/rspec-core.svg)](https://codeclimate.com/github/rspec/rspec-core)
+# rspec-core [![Build Status](https://github.com/rspec/rspec-core/workflows/RSpec%20CI/badge.svg)](https://github.com/rspec/rspec-core/actions) [![Code Climate](https://codeclimate.com/github/rspec/rspec-core.svg)](https://codeclimate.com/github/rspec/rspec-core)
 
 rspec-core provides the structure for writing executable examples of how your
 code should behave, and an `rspec` command with tools to constrain which
@@ -10,28 +10,14 @@ examples get run and tailor the output.
     gem install rspec-core # for rspec-core only
     rspec --help
 
-Want to run against the `master` branch? You'll need to include the dependent
+Want to run against the `main` branch? You'll need to include the dependent
 RSpec repos as well. Add the following to your `Gemfile`:
 
 ```ruby
 %w[rspec rspec-core rspec-expectations rspec-mocks rspec-support].each do |lib|
-  gem lib, :git => "https://github.com/rspec/#{lib}.git", :branch => 'master'
+  gem lib, :git => "https://github.com/rspec/#{lib}.git", :branch => 'main'
 end
 ```
-
-## Contributing
-
-Once you've set up the environment, you'll need to cd into the working
-directory of whichever repo you want to work in. From there you can run the
-specs and cucumber features, and make patches.
-
-NOTE: You do not need to use rspec-dev to work on a specific RSpec repo. You
-can treat each RSpec repo as an independent project.
-
-* [Build details](BUILD_DETAIL.md)
-* [Code of Conduct](CODE_OF_CONDUCT.md)
-* [Detailed contributing guide](CONTRIBUTING.md)
-* [Development setup guide](DEVELOPMENT.md)
 
 ## Basic Structure
 
@@ -375,6 +361,20 @@ Calculator
 Finished in 0.000379 seconds
 1 example, 0 failures
 ```
+
+## Contributing
+
+Once you've set up the environment, you'll need to cd into the working
+directory of whichever repo you want to work in. From there you can run the
+specs and cucumber features, and make patches.
+
+NOTE: You do not need to use rspec-dev to work on a specific RSpec repo. You
+can treat each RSpec repo as an independent project.
+
+* [Build details](BUILD_DETAIL.md)
+* [Code of Conduct](CODE_OF_CONDUCT.md)
+* [Detailed contributing guide](CONTRIBUTING.md)
+* [Development setup guide](DEVELOPMENT.md)
 
 ## Also see
 

@@ -17,6 +17,9 @@ Feature: `around` hooks
   **WARNING:** Mock frameworks are set up and torn down within the context of
   running the example. You cannot interact with them directly in `around` hooks.
 
+  **WARNING:** `around` hooks will execute *before* any `before` hooks, and *after*
+  any `after` hooks regardless of the context they were defined in.
+
   Scenario: Use the example as a proc within the block passed to `around()`
     Given a file named "example_spec.rb" with:
       """ruby
@@ -216,7 +219,7 @@ Feature: `around` hooks
         end
 
         it "runs the example in the correct context" do
-          expect(included_in_configure_block).to be_truthy
+          expect(included_in_configure_block).to be(true)
         end
       end
       """

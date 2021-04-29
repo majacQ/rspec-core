@@ -22,12 +22,18 @@ Feature: `before` and `after` hooks
   after  :suite
   ```
 
+  A bare `before` or `after` hook defaults to the `:example` scope.
+
   `before` and `after` hooks can be defined directly in the example groups they
-  should run in, or in a global `RSpec.configure` block.
+  should run in, or in a global `RSpec.configure` block. Note that the status of
+  the example does not affect the hooks.
 
   **WARNING:** Setting instance variables are not supported in `before(:suite)`.
 
   **WARNING:** Mocks are only supported in `before(:example)`.
+
+  **WARNING:** `around` hooks will execute *before* any `before` hooks, and *after*
+  any `after` hooks regardless of the context they were defined in.
 
   Note: the `:example` and `:context` scopes are also available as `:each` and
   `:all`, respectively. Use whichever you prefer.
@@ -184,6 +190,29 @@ Feature: `before` and `after` hooks
       # ./after_context_spec.rb:3
       """
 
+  Scenario: A failure in an example does not affect hooks
+    Given a file named "failure_in_example_spec.rb" with:
+      """ruby
+      RSpec.describe "a failing example does not affect hooks" do
+        before(:context) { puts "before context runs" }
+        before(:example) { puts "before example runs" }
+        after(:example) { puts "after example runs" }
+        after(:context) { puts "after context runs" }
+
+        it "fails the example but runs the hooks" do
+          raise "An Error"
+        end
+      end
+      """
+    When I run `rspec failure_in_example_spec.rb`
+    Then it should fail with:
+      """
+      before context runs
+      before example runs
+      after example runs
+      Fafter context runs
+      """
+
   Scenario: Define `before` and `after` blocks in configuration
     Given a file named "befores_in_configuration_spec.rb" with:
       """ruby
@@ -228,8 +257,16 @@ Feature: `before` and `after` hooks
           puts "before example"
         end
 
+        before do
+          puts "also before example but by default"
+        end
+
         after(:example) do
           puts "after example"
+        end
+
+        after do
+          puts "also after example but by default"
         end
 
         after(:context) do
@@ -246,11 +283,13 @@ Feature: `before` and `after` hooks
       """
       before context
       before example
+      also before example but by default
+      also after example but by default
       after example
       .after context
       """
 
-  Scenario: `before`/after` blocks defined in configuration are run in order
+  Scenario: `before`/`after` blocks defined in configuration are run in order
     Given a file named "configuration_spec.rb" with:
       """ruby
       require "rspec/expectations"

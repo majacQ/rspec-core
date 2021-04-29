@@ -22,9 +22,8 @@ module RSpec::Core
       begin
         parser(options).parse!(args)
       rescue OptionParser::InvalidOption => e
-        failure = e.message
-        failure << " (defined in #{source})" if source
-        abort "#{failure}\n\nPlease use --help for a listing of valid options"
+        abort "#{e.message}#{" (defined in #{source})" if source}\n\n" \
+              "Please use --help for a listing of valid options"
       end
 
       options[:files_or_directories_to_run] = args
@@ -37,6 +36,7 @@ module RSpec::Core
     # rubocop:disable Metrics/AbcSize
     # rubocop:disable CyclomaticComplexity
     # rubocop:disable PerceivedComplexity
+    # rubocop:disable Metrics/BlockLength
     def parser(options)
       OptionParser.new do |parser|
         parser.summary_width = 34
@@ -58,10 +58,11 @@ module RSpec::Core
         end
 
         parser.on('--order TYPE[:SEED]', 'Run examples by the specified order type.',
-                  '  [defined] examples and groups are run in the order they are defined',
-                  '  [rand]    randomize the order of groups and examples',
-                  '  [random]  alias for rand',
-                  '  [random:SEED] e.g. --order random:123') do |o|
+                  '  [defined]           examples and groups are run in the order they are defined',
+                  '  [rand]              randomize the order of groups and examples',
+                  '  [random]            alias for rand',
+                  '  [random:SEED]       e.g. --order random:123',
+                  '  [recently-modified] run the most recently modified files first') do |o|
           options[:order] = o
         end
 
@@ -95,6 +96,11 @@ module RSpec::Core
           options[:failure_exit_code] = code
         end
 
+        parser.on('--error-exit-code CODE', Integer,
+                  'Override the exit code used when there are errors loading or running specs outside of examples.') do |code|
+          options[:error_exit_code] = code
+        end
+
         parser.on('-X', '--[no-]drb', 'Run examples via DRb.') do |use_drb|
           options[:drb] = use_drb
           options[:runner] = RSpec::Core::Invocations::DRbWithFallback.new if use_drb
@@ -111,6 +117,7 @@ module RSpec::Core
                   '  [d]ocumentation (group and example names)',
                   '  [h]tml',
                   '  [j]son',
+                  '  [f]ailures ("file:line:reason", suitable for editors integration)',
                   '  custom formatter class name') do |o|
           options[:formatters] ||= []
           options[:formatters] << [o]
@@ -178,6 +185,9 @@ module RSpec::Core
         end
 
         parser.on('-w', '--warnings', 'Enable ruby warnings') do
+          if Object.const_defined?(:Warning) && Warning.respond_to?(:[]=)
+            Warning[:deprecated] = true
+          end
           $VERBOSE = true
         end
 
@@ -224,6 +234,11 @@ FILTERING
         parser.on('-e', '--example STRING', "Run examples whose full nested names include STRING (may be",
                   "  used more than once)") do |o|
           (options[:full_description] ||= []) << Regexp.compile(Regexp.escape(o))
+        end
+
+        parser.on('-E', '--example-matches REGEX', "Run examples whose full nested names match REGEX (may be",
+                  "  used more than once)") do |o|
+          (options[:full_description] ||= []) << Regexp.compile(o)
         end
 
         parser.on('-t', '--tag TAG[:VALUE]',
@@ -288,6 +303,7 @@ FILTERING
         end
       end
     end
+    # rubocop:enable Metrics/BlockLength
     # rubocop:enable Metrics/AbcSize
     # rubocop:enable MethodLength
     # rubocop:enable CyclomaticComplexity

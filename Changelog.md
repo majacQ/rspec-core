@@ -1,16 +1,119 @@
 ### Development
-[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.0...master)
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.10.1...main)
 
 Enhancements:
-* Improve the handling of errors during loading support files, if a file
-  errors before loading specs, RSpec will now skip loading the specs.
-  (David Rodríguez, #2568)
-* Prevent warning on Ruby 2.6.0-rc1 (Keiji Yoshimi, #2582)
+
+* Improve pluralisation of words ending with `s` (like process). (Joshua Pinter, #2779)
+* Add ordering by file modification time (most recent first). (Matheus Richard, #2778)
+* Add `to_s` to reserved names for #let and #subject. (Nick Flückiger, #2886)
+
+Bug fixes:
+
+* Ensure bisect communication uses consistent encoding. (Mike Jarema, #2852)
+
+### 3.10.1 / 2020-12-27
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.10.0...v3.10.1)
+
+Bug fixes:
+
+* RSpec warning output was missing deprecations from Ruby, these are now included.
+  (Jon Rowe, #2811)
+
+### 3.10.0 / 2020-10-30
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.3...v3.10.0)
+
+Enhancements:
+
+* Memoize `RSpec::Core::Formatters::ExceptionPresenter#exception_lines` to improve performance
+  with slow exception messages. (Maxime Lapointe, #2743)
+* Add configuration for an error exit code (to disambiguate errored builds from failed builds
+  by exit status). (Dana Sherson, #2749)
+
+# 3.9.3 / 2020-09-30
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.2...v3.9.3)
 
 Bug Fixes:
 
-  * Handle RSpec description with japanese char in CP932 encoded files
+* Declare `ruby2_keywords` on `method_missing` for other gems. (Jon Rowe, #2731)
+* Ensure custom error codes are returned from bisect runs. (Jon Rowe, #2732)
+* Ensure `RSpec::Core::Configuration` predicate config methods return booleans.
+  (Marc-André Lafortune, #2736)
+* Prevent `rspec --bisect` from generating zombie processes while executing
+  bisect runs. (Benoit Tigeot, Jon Rowe, #2739)
+* Predicates for pending examples, (in `RSpec::Core::Example`, `#pending?`, `#skipped?` and
+  `#pending_fixed?`) now return boolean values rather than truthy values.
+  (Marc-André Lafortune, #2756, #2758)
+* Exceptions which have a message which cannot be cast to a string will no longer
+  cause a crash. (Jon Rowe, #2761)
+
+### 3.9.2 / 2020-05-02
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.1...v3.9.2)
+
+Bug Fixes:
+
+* Emit a warning when `around` hook is used with `:context` scope
+  (Phil Pirozhkov, #2687)
+* Prevent invalid implementations of `Exception#cause` from being treated as a
+  valid cause (and causing strange errors) in `RSpec::Core::Formatters::ExceptionPresenter`.
+  (Jon Rowe, #2703)
+* Correctly detect patterns when `rspec_opts` is an array in `RSpec::Core::RakeTask`.
+  (Marc-André Lafortune, #2704)
+* Make `RSpec.clear_examples` reset example counts for example groups. This fixes
+  an issue with re-running specs not matching ids. (Agis Anastasopoulos, #2723)
+
+### 3.9.1 / 2019-12-28
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.9.0...v3.9.1)
+
+Bug Fixes:
+
+* Prevent bisect command from blocking when number of specs exceeds file
+  descriptor limit on OSX or Linux. (Benoit Tigeot, #2669)
+* Prevent warnings being issued on Ruby 2.7.0. (Jon Rowe, #2680)
+
+### 3.9.0 / 2019-10-07
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.2...v3.9.0)
+
+Enhancements:
+
+* Improve the handling of errors during loading support files, if a file
+  errors before loading specs, RSpec will now skip loading the specs.
+  (David Rodríguez, #2568)
+* Add support for --example-matches to run examples by regular expression.
+  (Sam Joseph, Matt Rider, @okothkongo1, #2586)
+* Add `did_you_mean` suggestions for file names encountering a `LoadError`
+  outside of examples. (@obromios, #2601)
+* Add a minimalist quick fix style formatter, only outputs failures as
+  `file:line:message`. (Romain Tartière, #2614)
+* Convert string number values to integer when used for `RSpec::Configuration#fail_fast`
+  (Viktor Fonic, #2634)
+* Issue warning when invalid values are used for `RSpec::Configuration#fail_fast`
+  (Viktor Fonic, #2634)
+* Add support for running the Rake task in a clean environment.
+  (Jon Rowe, #2632)
+* Indent messages by there example group / example in the documentation formatter.
+  (Samuel Williams, #2649)
+
+### 3.8.2 / 2019-06-29
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.1...v3.8.2)
+
+Bug Fixes:
+
+* Fix `config.define_derived_metadata` so that cascades are not triggered
+  until metadata has been assigned to the example or example group
+  (Myron Marston, #2635).
+
+### 3.8.1 / 2019-06-13
+[Full Changelog](http://github.com/rspec/rspec-core/compare/v3.8.0...v3.8.1)
+
+Bug Fixes:
+
+* Handle RSpec description(s) with japanese chars in CP932 encoded files.
   (Benoit Tigeot, #2575)
+* When defining `let` methods that overwrite an existing method, prevent
+  a warning being issued by removing the old definition. (Jon Rowe, #2593)
+* Prevent warning on Ruby 2.6.0-rc1 (Keiji Yoshimi, #2582)
+* Fix `config.define_derived_metadata` so that it supports cascades.
+  (Myron Marston, #2630).
 
 ### 3.8.0 / 2018-08-04
 [Full Changelog](http://github.com/rspec/rspec-core/compare/v3.7.1...v3.8.0)
@@ -2089,6 +2192,7 @@ Bug fixes
 [Full Changelog](http://github.com/rspec/rspec-core/compare/v2.2.0...v2.2.1)
 
 Bug fixes
+
 * alias_method instead of override Kernel#method_missing (John Wilger)
 * changed --autotest to --tty in generated command (MIKAMI Yoshiyuki)
 * revert change to debugger (had introduced conflict with Rails)

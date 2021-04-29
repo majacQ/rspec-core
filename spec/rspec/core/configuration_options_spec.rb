@@ -296,16 +296,16 @@ RSpec.describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :
   end
 
   describe "--fail-fast" do
-    it "defaults to false" do
-      expect(parse_options[:fail_fast]).to be_falsey
+    it "defaults to nil" do
+      expect(parse_options[:fail_fast]).to be(nil)
     end
 
-    it "sets fail_fast on config" do
-      expect(parse_options("--fail-fast")[:fail_fast]).to be_truthy
+    it "sets fail_fast to 1 on config" do
+      expect(parse_options("--fail-fast")[:fail_fast]).to be(1)
     end
 
-    it "sets fail_fast on config" do
-      expect(parse_options("--no-fail-fast")[:fail_fast]).to be_falsey
+    it "sets fail_fast to false on config" do
+      expect(parse_options("--no-fail-fast")[:fail_fast]).to be(false)
     end
   end
 
@@ -321,13 +321,25 @@ RSpec.describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :
     end
   end
 
+  describe "--error-exit-code" do
+    it "sets :error_exit_code" do
+      expect(parse_options('--error-exit-code', '0')).to include(:error_exit_code => 0)
+      expect(parse_options('--error-exit-code', '1')).to include(:error_exit_code => 1)
+      expect(parse_options('--error-exit-code', '2')).to include(:error_exit_code => 2)
+    end
+
+    it "overrides previous :error_exit_code" do
+      expect(parse_options('--error-exit-code', '2', '--error-exit-code', '3')).to include(:error_exit_code => 3)
+    end
+  end
+
   describe "--dry-run" do
-    it "defaults to false" do
-      expect(parse_options[:dry_run]).to be_falsey
+    it "defaults to nil" do
+      expect(parse_options[:dry_run]).to be(nil)
     end
 
     it "sets dry_run on config" do
-      expect(parse_options("--dry-run")[:dry_run]).to be_truthy
+      expect(parse_options("--dry-run")[:dry_run]).to be(true)
     end
   end
 
@@ -464,7 +476,7 @@ RSpec.describe RSpec::Core::ConfigurationOptions, :isolated_directory => true, :
 
         expect(options[:requires]).to eq(["some_file"])
         expect(options[:full_description]).to eq([/foo\ bar/])
-        expect(options[:drb]).to be_truthy
+        expect(options[:drb]).to be(true)
         expect(options[:formatters]).to eq([['global']])
       end
     end

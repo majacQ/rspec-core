@@ -67,15 +67,17 @@ module RSpec
       end
 
       # @private
-      def self.define_aliases(name, alias_name)
+      def self.define_alias(name, alias_name)
         alias_method alias_name, name
         alias_method "#{alias_name}=", "#{name}="
-        define_predicate_for alias_name
+        define_predicate alias_name
       end
 
       # @private
-      def self.define_predicate_for(*names)
-        names.each { |name| alias_method "#{name}?", name }
+      def self.define_predicate(name)
+        define_method "#{name}?" do
+          !!send(name)
+        end
       end
 
       # @private
@@ -88,7 +90,7 @@ module RSpec
         add_read_only_setting name
 
         Array(opts[:alias_with]).each do |alias_name|
-          define_aliases(name, alias_name)
+          define_alias(name, alias_name)
         end
       end
 
@@ -98,7 +100,7 @@ module RSpec
       def self.add_read_only_setting(name, opts={})
         raise "Use the instance add_setting method if you want to set a default" if opts.key?(:default)
         define_reader name
-        define_predicate_for name
+        define_predicate name
       end
 
       # @macro [attach] add_setting
@@ -202,10 +204,33 @@ module RSpec
         only_failures? && !example_status_persistence_file_path
       end
 
-      # @macro add_setting
+      # @macro define_reader
       # If specified, indicates the number of failures required before cleaning
-      # up and exit (default: `nil`).
-      add_setting :fail_fast
+      # up and exit (default: `nil`). Can also be `true` to fail and exit on first
+      # failure
+      define_reader :fail_fast
+
+      # @see fail_fast
+      def fail_fast=(value)
+        case value
+        when true, 'true'
+          @fail_fast = true
+        when false, 'false', 0
+          @fail_fast = false
+        when nil
+          @fail_fast = nil
+        else
+          @fail_fast = value.to_i
+
+          if value.to_i == 0
+            # TODO: in RSpec 4, consider raising an error here.
+            RSpec.warning "Cannot set `RSpec.configuration.fail_fast`" \
+              " to `#{value.inspect}`. Only `true`, `false`, `nil` and integers" \
+              " are valid values."
+            @fail_fast = true
+          end
+        end
+      end
 
       # @macro add_setting
       # Prints the formatter output of your suite without running any
@@ -216,6 +241,11 @@ module RSpec
       # The exit code to return if there are any failures (default: 1).
       # @return [Integer]
       add_setting :failure_exit_code
+
+      # @macro add_setting
+      # The exit code to return if there are any errors outside examples (default: failure_exit_code)
+      # @return [Integer]
+      add_setting :error_exit_code
 
       # @macro add_setting
       # Whether or not to fail when there are no RSpec examples (default: false).
@@ -289,7 +319,8 @@ module RSpec
       # Report the times for the slowest examples (default: `false`).
       # Use this to specify the number of examples to include in the profile.
       # @return [Boolean]
-      add_setting :profile_examples
+      attr_writer :profile_examples
+      define_predicate :profile_examples
 
       # @macro add_setting
       # Run all examples if none match the configured filters
@@ -497,6 +528,7 @@ module RSpec
         @pattern = '**{,/*/**}/*_spec.rb'
         @exclude_pattern = ''
         @failure_exit_code = 1
+        @error_exit_code = nil # so it can be overridden by failure exit code
         @fail_if_no_examples = false
         @spec_files_loaded = false
 
@@ -1327,6 +1359,12 @@ module RSpec
       #       end
       #     end
       #
+      #     module PreferencesHelpers
+      #       def preferences(user, preferences = {})
+      #         # ...
+      #       end
+      #     end
+      #
       #     module UserHelpers
       #       def users(username)
       #         # ...
@@ -1335,12 +1373,17 @@ module RSpec
       #
       #     RSpec.configure do |config|
       #       config.include(UserHelpers) # included in all groups
+      #
+      #       # included in examples with `:preferences` metadata
+      #       config.include(PreferenceHelpers, :preferences)
+      #
+      #       # included in examples with `:type => :request` metadata
       #       config.include(AuthenticationHelpers, :type => :request)
       #     end
       #
-      #     describe "edit profile", :type => :request do
+      #     describe "edit profile", :preferences, :type => :request do
       #       it "can be viewed by owning user" do
-      #         login_as users(:jdoe)
+      #         login_as preferences(users(:jdoe), :lang => 'es')
       #         get "/profiles/jdoe"
       #         assert_select ".username", :text => 'jdoe'
       #       end
@@ -1368,17 +1411,21 @@ module RSpec
       #
       # @example
       #
-      #     RSpec.shared_context "example users" do
+      #     RSpec.shared_context "example admin user" do
       #       let(:admin_user) { create_user(:admin) }
+      #     end
+      #
+      #     RSpec.shared_context "example guest user" do
       #       let(:guest_user) { create_user(:guest) }
       #     end
       #
       #     RSpec.configure do |config|
-      #       config.include_context "example users", :type => :request
+      #       config.include_context "example guest user", :type => :request
+      #       config.include_context "example admin user", :admin, :type => :request
       #     end
       #
       #     RSpec.describe "The admin page", :type => :request do
-      #       it "can be viewed by admins" do
+      #       it "can be viewed by admins", :admin do
       #         login_with admin_user
       #         get "/admin"
       #         expect(response).to be_ok
@@ -1420,12 +1467,20 @@ module RSpec
       #       end
       #     end
       #
-      #     RSpec.configure do |config|
-      #       config.extend(UiHelpers, :type => :request)
+      #     module PermissionHelpers
+      #       def define_permissions
+      #         # ...
+      #       end
       #     end
       #
-      #     describe "edit profile", :type => :request do
+      #     RSpec.configure do |config|
+      #       config.extend(UiHelpers, :type => :request)
+      #       config.extend(PermissionHelpers, :with_permissions, :type => :request)
+      #     end
+      #
+      #     describe "edit profile", :with_permissions, :type => :request do
       #       run_in_browser
+      #       define_permissions
       #
       #       it "does stuff in the client" do
       #         # ...
@@ -1855,16 +1910,36 @@ module RSpec
 
       # @private
       def apply_derived_metadata_to(metadata)
-        @derived_metadata_blocks.items_for(metadata).each do |block|
-          block.call(metadata)
+        already_run_blocks = Set.new
+
+        # We loop and attempt to re-apply metadata blocks to support cascades
+        # (e.g. where a derived bit of metadata triggers the application of
+        # another piece of derived metadata, etc)
+        #
+        # We limit our looping to 200 times as a way to detect infinitely recursing derived metadata blocks.
+        # It's hard to imagine a valid use case for a derived metadata cascade greater than 200 iterations.
+        200.times do
+          return if @derived_metadata_blocks.items_for(metadata).all? do |block|
+            already_run_blocks.include?(block).tap do |skip_block|
+              block.call(metadata) unless skip_block
+              already_run_blocks << block
+            end
+          end
         end
+
+        # If we got here, then `@derived_metadata_blocks.items_for(metadata).all?` never returned
+        # `true` above and we treat this as an attempt to recurse infinitely. It's better to fail
+        # with a clear # error than hang indefinitely, which is what would happen if we didn't limit
+        # the looping above.
+        raise SystemStackError, "Attempted to recursively derive metadata indefinitely."
       end
 
       # Defines a `before` hook. See {Hooks#before} for full docs.
       #
       # This method differs from {Hooks#before} in only one way: it supports
       # the `:suite` scope. Hooks with the `:suite` scope will be run once before
-      # the first example of the entire suite is executed.
+      # the first example of the entire suite is executed. Conditions passed along
+      # with `:suite` are effectively ignored.
       #
       # @see #prepend_before
       # @see #after
@@ -1893,7 +1968,8 @@ module RSpec
       #
       # This method differs from {Hooks#prepend_before} in only one way: it supports
       # the `:suite` scope. Hooks with the `:suite` scope will be run once before
-      # the first example of the entire suite is executed.
+      # the first example of the entire suite is executed. Conditions passed along
+      # with `:suite` are effectively ignored.
       #
       # @see #before
       # @see #after
@@ -1917,7 +1993,8 @@ module RSpec
       #
       # This method differs from {Hooks#after} in only one way: it supports
       # the `:suite` scope. Hooks with the `:suite` scope will be run once after
-      # the last example of the entire suite is executed.
+      # the last example of the entire suite is executed. Conditions passed along
+      # with `:suite` are effectively ignored.
       #
       # @see #append_after
       # @see #before
@@ -1946,7 +2023,8 @@ module RSpec
       #
       # This method differs from {Hooks#append_after} in only one way: it supports
       # the `:suite` scope. Hooks with the `:suite` scope will be run once after
-      # the last example of the entire suite is executed.
+      # the last example of the entire suite is executed. Conditions passed along
+      # with `:suite` are effectively ignored.
       #
       # @see #append_after
       # @see #before
@@ -2032,6 +2110,11 @@ module RSpec
 
       def load_file_handling_errors(method, file)
         __send__(method, file)
+      rescue LoadError => ex
+        relative_file = Metadata.relative_path(file)
+        suggestions = DidYouMean.new(relative_file).call
+        reporter.notify_non_example_exception(ex, "An error occurred while loading #{relative_file}.#{suggestions}")
+        RSpec.world.wants_to_quit = true
       rescue Support::AllExceptionsExceptOnesWeMustNotRescue => ex
         relative_file = Metadata.relative_path(file)
         reporter.notify_non_example_exception(ex, "An error occurred while loading #{relative_file}.")

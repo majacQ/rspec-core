@@ -5,7 +5,7 @@ module RSpec
     # Internal container for global non-configuration data.
     class World
       # @private
-      attr_reader :example_groups, :filtered_examples
+      attr_reader :example_groups, :filtered_examples, :example_group_counts_by_spec_file
 
       # Used internally to determine what to do when a SIGINT is received.
       attr_accessor :wants_to_quit
@@ -17,6 +17,7 @@ module RSpec
       attr_accessor :non_example_failure
 
       def initialize(configuration=RSpec.configuration)
+        @wants_to_quit = false
         @configuration = configuration
         configuration.world = self
         @example_groups = []
@@ -53,6 +54,7 @@ module RSpec
         example_groups.clear
         @sources_by_path.clear if defined?(@sources_by_path)
         @syntax_highlighter = nil
+        @example_group_counts_by_spec_file = Hash.new(0)
       end
 
       # @private

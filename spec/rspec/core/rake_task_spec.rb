@@ -28,7 +28,7 @@ module RSpec::Core
         end
 
         expect(the_task).to receive(:run_task) { true }
-        expect(Rake.application.invoke_task("rake_task_args[first_spec.rb]")).to be_truthy
+        Rake.application.invoke_task("rake_task_args[first_spec.rb]")
       end
     end
 
@@ -62,15 +62,26 @@ module RSpec::Core
     end
 
     context "with rspec_opts" do
+      include RSpec::Core::ShellEscape
+
       it "adds the rspec_opts" do
         task.rspec_opts = "-Ifoo"
-        expect(spec_command).to match(/#{task.rspec_path}.*-Ifoo/)
+        expect(spec_command).to match(/#{task.rspec_path}.*-Ifoo/).and(
+          include(escape(RSpec::Core::RakeTask::DEFAULT_PATTERN)) # sanity check for following specs
+        )
       end
 
       it 'correctly excludes the default pattern if rspec_opts includes --pattern' do
         task.rspec_opts = "--pattern some_specs"
         expect(spec_command).to include("--pattern some_specs").and(
-          exclude(RSpec::Core::RakeTask::DEFAULT_PATTERN)
+          exclude(escape(RSpec::Core::RakeTask::DEFAULT_PATTERN))
+        )
+      end
+
+      it 'behaves properly if rspec_opts is an array' do
+        task.rspec_opts = %w[--pattern some_specs]
+        expect(spec_command).to include("--pattern some_specs").and(
+          exclude(escape(RSpec::Core::RakeTask::DEFAULT_PATTERN))
         )
       end
     end
@@ -145,6 +156,24 @@ module RSpec::Core
           task.ruby_opts = '-e "exit(1);" ;#'
           task.run_task false
         }.to avoid_outputting.to_stdout.and avoid_outputting.to_stderr
+      end
+    end
+
+    context "with_clean_environment is set" do
+      it "removes the environment variables", :if => RUBY_VERSION >= '1.9.0', :unless => RSpec::Support::Ruby.jruby? do
+        with_env_vars 'MY_ENV' => 'ABC' do
+          if RSpec::Support::OS.windows?
+            essential_shell_variables = /\["ANSICON", "ANSICON_DEF", "HOME", "TMPDIR", "USER"\]/
+          else
+            essential_shell_variables = /\["PWD"(?:, "SHLVL")?(?:, "_")?(?:, "__CF_USER_TEXT_ENCODING")?\]/
+          end
+
+          expect {
+            task.with_clean_environment = true
+            task.ruby_opts = '-e "puts \"Environment: #{ENV.keys.sort.inspect}\""'
+            task.run_task false
+          }.to avoid_outputting.to_stderr.and output(essential_shell_variables).to_stdout_from_any_process
+        end
       end
     end
 
@@ -279,9 +308,7 @@ module RSpec::Core
       end
 
       context "that is an absolute path file glob" do
-        it "loads the matching spec files", :failing_on_appveyor,
-        :pending => false,
-        :skip => (ENV['APPVEYOR'] ? "Failing on AppVeyor but :pending isn't working for some reason" : false) do
+        it "loads the matching spec files", :emits_warning_on_windows_on_old_ruby, :pending_on_windows_old_ruby do
           dir = File.expand_path("../resources", __FILE__)
           task.pattern = File.join(dir, "**/*_spec.rb")
 
@@ -414,7 +441,7 @@ module RSpec::Core
     context "with paths with quotes or spaces" do
       include_context "isolated directory"
 
-      it "matches files with quotes and spaces", :failing_on_appveyor do
+      it "matches files with quotes and spaces", :failing_on_windows_ci do
         spec_dir = File.join(Dir.getwd, "spec")
         task.pattern = "spec/*spec.rb"
         FileUtils.mkdir_p(spec_dir)

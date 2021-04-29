@@ -371,7 +371,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         example('example') { expect(1).to eq(1) }
       end
       group.run
-      expect(after_run).to be_truthy, "expected after(:each) to be run"
+      expect(after_run).to be(true), "expected after(:each) to be run"
     end
 
     it "runs after(:each) when the example fails" do
@@ -381,7 +381,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         example('example') { expect(1).to eq(2) }
       end
       group.run
-      expect(after_run).to be_truthy, "expected after(:each) to be run"
+      expect(after_run).to be(true), "expected after(:each) to be run"
     end
 
     it "runs after(:each) when the example raises an Exception" do
@@ -391,7 +391,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         example('example') { raise "this error" }
       end
       group.run
-      expect(after_run).to be_truthy, "expected after(:each) to be run"
+      expect(after_run).to be(true), "expected after(:each) to be run"
     end
 
     context "with an after(:each) that raises" do
@@ -403,7 +403,7 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
           example('example') { expect(1).to eq(1) }
         end
         group.run
-        expect(after_run).to be_truthy, "expected after(:each) to be run"
+        expect(after_run).to be(true), "expected after(:each) to be run"
       end
 
       it "stores the exception" do
@@ -443,7 +443,9 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
 
     context 'memory leaks, see GH-321, GH-1921' do
       def self.reliable_gc
-        0 != GC.method(:start).arity # older Rubies don't give us options to ensure a full GC
+        # older Rubies don't give us options to ensure a full GC
+        # TruffleRuby GC.start arity matches but GC.disable and GC.enable are mock implementations
+        0 != GC.method(:start).arity && !(defined?(RUBY_ENGINE) && RUBY_ENGINE == "truffleruby")
       end
 
       def expect_gc(opts)
@@ -776,7 +778,18 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         expect_pending_result(group.examples.last)
       end
     end
+  end
 
+  describe "#pending?" do
+    it "only returns true / false values" do
+      group = describe_successfully do
+        example("", :pending => "a message thats ignored") { fail }
+        example { }
+      end
+
+      expect(group.examples[0].pending?).to eq true
+      expect(group.examples[1].pending?).to eq false
+    end
   end
 
   describe "#skip" do
@@ -842,6 +855,18 @@ RSpec.describe RSpec::Core::Example, :parent_metadata => 'sample' do
         end
         expect(group.examples.first).to be_skipped
       end
+    end
+  end
+
+  describe "#skipped?" do
+    it "only returns true / false values" do
+      group = describe_successfully do
+        example("", :skip => "a message thats ignored") { fail }
+        example { }
+      end
+
+      expect(group.examples[0].skipped?).to eq true
+      expect(group.examples[1].skipped?).to eq false
     end
   end
 

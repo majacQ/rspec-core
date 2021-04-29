@@ -43,7 +43,7 @@ module RSpec
 
         if RSpec::Support::RubyFeatures.supports_exception_cause?
           def formatted_cause(exception)
-            last_cause = final_exception(exception)
+            last_cause = final_exception(exception, [exception])
             cause = []
 
             if exception.cause
@@ -51,11 +51,13 @@ module RSpec
               cause << '--- Caused by: ---'
               cause << "#{exception_class_name(last_cause)}:" unless exception_class_name(last_cause) =~ /RSpec/
 
-              encoded_string(last_cause.message.to_s).split("\n").each do |line|
+              encoded_string(exception_message_string(last_cause)).split("\n").each do |line|
                 cause << "  #{line}"
               end
 
-              cause << ("  #{backtrace_formatter.format_backtrace(last_cause.backtrace, example.metadata).first}")
+              unless last_cause.backtrace.empty?
+                cause << ("  #{backtrace_formatter.format_backtrace(last_cause.backtrace, example.metadata).first}")
+              end
             end
 
             cause
@@ -96,7 +98,8 @@ module RSpec
 
         def final_exception(exception, previous=[])
           cause = exception.cause
-          if cause && !previous.include?(cause)
+
+          if cause && Exception === cause && !previous.include?(cause)
             previous << cause
             final_exception(cause, previous)
           else
@@ -171,13 +174,23 @@ module RSpec
           lines
         end
 
+        # rubocop:disable Lint/RescueException
+        def exception_message_string(exception)
+          exception.message.to_s
+        rescue Exception => other
+          "A #{exception.class} for which `exception.message.to_s` raises #{other.class}."
+        end
+        # rubocop:enable Lint/RescueException
+
         def exception_lines
-          lines = []
-          lines << "#{exception_class_name}:" unless exception_class_name =~ /RSpec/
-          encoded_string(exception.message.to_s).split("\n").each do |line|
-            lines << (line.empty? ? line : "  #{line}")
+          @exception_lines ||= begin
+            lines = []
+            lines << "#{exception_class_name}:" unless exception_class_name =~ /RSpec/
+            encoded_string(exception_message_string(exception)).split("\n").each do |line|
+              lines << (line.empty? ? line : "  #{line}")
+            end
+            lines
           end
-          lines
         end
 
         def extra_failure_lines

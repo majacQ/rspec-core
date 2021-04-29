@@ -6,8 +6,11 @@ RSpec.describe 'Suite hook errors' do
   include FormatterSupport
 
   let(:failure_exit_code) { rand(97) + 2 } # 2..99
+  let(:error_exit_code) { failure_exit_code + 2 } # 4..101
 
-  if RSpec::Support::Ruby.jruby_9000?
+  if RSpec::Support::Ruby.jruby_9000? && RSpec::Support::Ruby.jruby_version > '9.2.0.0'
+    let(:spec_line_suffix) { ":in `block in <main>'" }
+  elsif RSpec::Support::Ruby.jruby_9000?
     let(:spec_line_suffix) { ":in `block in (root)'" }
   elsif RSpec::Support::Ruby.jruby?
     let(:spec_line_suffix) { ":in `(root)'" }
@@ -18,16 +21,13 @@ RSpec.describe 'Suite hook errors' do
   end
 
   before do
-    # get out of `aruba` sub-dir so that `filter_gems_from_backtrace 'aruba'`
-    # below does not filter out our spec file.
-    expect(dirs.pop).to eq "aruba"
-
-    clean_current_dir
+    setup_aruba
 
     RSpec.configure do |c|
-      c.filter_gems_from_backtrace "aruba"
+      c.filter_gems_from_backtrace "gems/aruba"
       c.backtrace_exclusion_patterns << %r{/rspec-core/spec/} << %r{rspec_with_simplecov}
       c.failure_exit_code = failure_exit_code
+      c.error_exit_code = error_exit_code
     end
   end
 
@@ -45,7 +45,7 @@ RSpec.describe 'Suite hook errors' do
     "
 
     run_command "the_spec.rb"
-    expect(last_cmd_exit_status).to eq(failure_exit_code)
+    expect(last_cmd_exit_status).to eq(error_exit_code)
     normalize_durations(last_cmd_stdout)
   end
 
@@ -99,8 +99,21 @@ RSpec.describe 'Suite hook errors' do
       end
     "
 
+    cause =
+      if RSpec::Support::Ruby.jruby_9000? && RSpec::Support::Ruby.jruby_version > '9.2.0.0'
+        unindent(<<-EOS)
+          # ------------------
+          # --- Caused by: ---
+          # RuntimeError:
+          #   before 1
+          #   ./the_spec.rb:3:in `block in <main>'
+        EOS
+      else
+        ""
+      end
+
     run_command "the_spec.rb"
-    expect(last_cmd_exit_status).to eq(failure_exit_code)
+    expect(last_cmd_exit_status).to eq(error_exit_code)
     output = normalize_durations(last_cmd_stdout)
 
     expect(output).to eq unindent(<<-EOS)
@@ -118,14 +131,14 @@ RSpec.describe 'Suite hook errors' do
       RuntimeError:
         after 2
       # ./the_spec.rb:6#{spec_line_suffix}
-
+      #{ cause }
       An error occurred in an `after(:suite)` hook.
       Failure/Error: c.after(:suite) { raise 'after 1' }
 
       RuntimeError:
         after 1
       # ./the_spec.rb:5#{spec_line_suffix}
-
+      #{ cause }
 
       Finished in n.nnnn seconds (files took n.nnnn seconds to load)
       0 examples, 0 failures, 3 errors occurred outside of examples

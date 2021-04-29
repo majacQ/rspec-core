@@ -41,6 +41,87 @@ module RSpec::Core
       end
     end
 
+    describe "#fail_fast=" do
+      context 'when true' do
+        it 'is set to true' do
+          config.fail_fast = true
+          expect(config.fail_fast).to eq true
+        end
+      end
+
+      context "when 'true'" do
+        it 'is set to true' do
+          config.fail_fast = 'true'
+          expect(config.fail_fast).to eq true
+        end
+      end
+
+      context "when false" do
+        it 'is set to false' do
+          config.fail_fast = false
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when 'false'" do
+        it 'is set to false' do
+          config.fail_fast = 'false'
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when 0" do
+        it 'is set to false' do
+          config.fail_fast = 0
+          expect(config.fail_fast).to eq false
+        end
+      end
+
+      context "when integer number" do
+        it 'is set to number' do
+          config.fail_fast = 5
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when floating point number" do
+        it 'is set to integer number' do
+          config.fail_fast = 5.9
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when string represeting an integer number" do
+        it 'is set to number' do
+          config.fail_fast = '5'
+          expect(config.fail_fast).to eq 5
+        end
+      end
+
+      context "when nil" do
+        it 'is nil' do
+          config.fail_fast = nil
+          expect(config.fail_fast).to eq nil
+        end
+      end
+
+      context "when unrecognized value" do
+        before do
+          allow(RSpec).to receive(:warning)
+        end
+
+        it 'prints warning' do
+          config.fail_fast = 'yes'
+          expect(RSpec).to have_received(:warning).with(/Cannot set `RSpec.configuration.fail_fast`/i)
+        end
+
+        it 'is set to true' do
+          config.fail_fast = 'yes'
+          expect(config.fail_fast).to eq true
+        end
+      end
+    end
+
     describe 'fail_if_no_examples' do
       it 'defaults to false' do
         expect(RSpec::Core::Configuration.new.fail_if_no_examples).to be(false)
@@ -212,7 +293,7 @@ module RSpec::Core
           mod_config.custom_setting = true
         end
 
-        expect(mod.configuration.custom_setting).to be_truthy
+        expect(mod.configuration.custom_setting).to be(true)
       end
 
       it "raises if framework module doesn't support configuration" do
@@ -454,9 +535,7 @@ module RSpec::Core
         expect(config.files_to_run).to contain_files("./spec/rspec/core/resources/a_spec.rb")
       end
 
-      it "supports absolute path patterns", :failing_on_appveyor,
-        :pending => false,
-        :skip => (ENV['APPVEYOR'] ? "Failing on AppVeyor but :pending isn't working for some reason" : false) do
+      it "supports absolute path patterns", :emits_warning_on_windows_on_old_ruby do
         dir = File.expand_path("../resources", __FILE__)
         config.pattern = File.join(dir, "**/*_spec.rb")
         assign_files_or_directories_to_run "spec"
@@ -537,7 +616,7 @@ module RSpec::Core
           expect(config.files_to_run).to contain_files("C:/path/to/project/spec/sub/foo_spec.rb")
         end
 
-        it "loads files in Windows when directory is specified", :failing_on_appveyor, :if => RSpec::Support::OS.windows? do
+        it "loads files in Windows when directory is specified", :failing_on_windows_ci, :if => RSpec::Support::OS.windows? do
           assign_files_or_directories_to_run "spec\\rspec\\core\\resources"
           expect(config.files_to_run).to contain_files("spec/rspec/core/resources/a_spec.rb")
         end
@@ -1219,14 +1298,13 @@ module RSpec::Core
     end
 
     describe "#run_all_when_everything_filtered?" do
-
       it "defaults to false" do
-        expect(config.run_all_when_everything_filtered?).to be_falsey
+        expect(config.run_all_when_everything_filtered?).to be(false)
       end
 
-      it "can be queried with question method" do
+      it "can be queried by predicate method" do
         config.run_all_when_everything_filtered = true
-        expect(config.run_all_when_everything_filtered?).to be_truthy
+        expect(config.run_all_when_everything_filtered?).to be(true)
       end
     end
 
@@ -1698,14 +1776,14 @@ module RSpec::Core
         config_2 = Configuration.new
 
         config_1.full_backtrace = true
-        expect(config_2.full_backtrace?).to be_falsey
+        expect(config_2.full_backtrace?).to be(false)
       end
     end
 
     describe "#backtrace_exclusion_patterns=" do
       it "actually receives the new filter values" do
         config.backtrace_exclusion_patterns = [/.*/]
-        expect(config.backtrace_formatter.exclude? "this").to be_truthy
+        expect(config.backtrace_formatter.exclude? "this").to be(true)
       end
     end
 
@@ -1724,7 +1802,7 @@ module RSpec::Core
     describe "#backtrace_exclusion_patterns" do
       it "can be appended to" do
         config.backtrace_exclusion_patterns << /.*/
-        expect(config.backtrace_formatter.exclude? "this").to be_truthy
+        expect(config.backtrace_formatter.exclude? "this").to be(true)
       end
     end
 
@@ -1817,6 +1895,42 @@ module RSpec::Core
 
         group = RSpec.describe("bar")
         expect(group.metadata).to include(:b1_desc => "bar (block 1)", :b2_desc => "bar (block 1) (block 2)")
+      end
+
+      it 'supports cascades of derived metadata, but avoids re-running derived metadata blocks that have already been applied' do
+        RSpec.configure do |c|
+          c.define_derived_metadata(:foo1) { |m| m[:foo2] = (m[:foo2] || 0) + 1 }
+          c.define_derived_metadata(:foo2) { |m| m[:foo3] = (m[:foo3] || 0) + 1 }
+          c.define_derived_metadata(:foo3) { |m| m[:foo1] += 1 }
+        end
+
+        group = RSpec.describe("bar", :foo1 => 0)
+        expect(group.metadata).to include(:foo1 => 1, :foo2 => 1, :foo3 => 1)
+
+        ex = RSpec.describe("My group").example("foo", :foo1 => 0)
+        expect(ex.metadata).to include(:foo1 => 1, :foo2 => 1, :foo3 => 1)
+      end
+
+      it 'does not allow a derived metadata cascade to recurse infinitely' do
+        RSpec.configure do |c|
+          counter = 1
+          derive_next_metadata = lambda do |outer_meta|
+            tag = :"foo#{counter += 1}"
+            outer_meta[tag] = true
+
+            c.define_derived_metadata(tag) do |inner_meta|
+              derive_next_metadata.call(inner_meta)
+            end
+          end
+
+          c.define_derived_metadata(:foo1) do |meta|
+            derive_next_metadata.call(meta)
+          end
+        end
+
+        expect {
+          RSpec.describe("group", :foo1)
+        }.to raise_error(SystemStackError)
       end
 
       it "derives metadata before the group or example blocks are eval'd so their logic can depend on the derived metadata" do
@@ -2096,7 +2210,7 @@ module RSpec::Core
           end
 
           it "adds a predicate" do
-            expect(config.custom_option?).to be_falsey
+            expect(config.custom_option?).to be(false)
           end
 
           it "can be overridden" do
@@ -2115,7 +2229,7 @@ module RSpec::Core
           end
 
           it "returns true for the predicate" do
-            expect(config.custom_option?).to be_truthy
+            expect(config.custom_option?).to be(true)
           end
 
           it "can be overridden with a truthy value" do
@@ -2152,7 +2266,7 @@ module RSpec::Core
 
         it "delegates the predicate to the other option" do
           config.custom_option = true
-          expect(config.another_custom_option?).to be_truthy
+          expect(config.another_custom_option?).to be(true)
         end
       end
     end
@@ -2409,11 +2523,11 @@ module RSpec::Core
       it "forces 'false' value" do
         config.add_setting :custom_option
         config.custom_option = true
-        expect(config.custom_option?).to be_truthy
+        expect(config.custom_option?).to be(true)
         config.force :custom_option => false
-        expect(config.custom_option?).to be_falsey
+        expect(config.custom_option?).to be(false)
         config.custom_option = true
-        expect(config.custom_option?).to be_falsey
+        expect(config.custom_option?).to be(false)
       end
     end
 
@@ -2742,6 +2856,28 @@ module RSpec::Core
       it 'is configurable' do
         config.max_displayed_failure_line_count = 5
         expect(config.max_displayed_failure_line_count).to eq 5
+      end
+    end
+
+    describe '#failure_exit_code' do
+      it 'defaults to 1' do
+        expect(config.failure_exit_code).to eq 1
+      end
+
+      it 'is configurable' do
+        config.failure_exit_code = 2
+        expect(config.failure_exit_code).to eq 2
+      end
+    end
+
+    describe '#error_exit_code' do
+      it 'defaults to nil' do
+        expect(config.error_exit_code).to eq nil
+      end
+
+      it 'is configurable' do
+        config.error_exit_code = 2
+        expect(config.error_exit_code).to eq 2
       end
     end
 

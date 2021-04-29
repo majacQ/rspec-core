@@ -1,4 +1,5 @@
 RSpec::Support.require_rspec_support "directory_maker"
+
 # ## Built-in Formatters
 #
 # * progress (default) - Prints dots for passing examples, `F` for failures, `*`
@@ -74,10 +75,11 @@ module RSpec::Core::Formatters
   autoload :JsonFormatter,            'rspec/core/formatters/json_formatter'
   autoload :BisectDRbFormatter,       'rspec/core/formatters/bisect_drb_formatter'
   autoload :ExceptionPresenter,       'rspec/core/formatters/exception_presenter'
+  autoload :FailureListFormatter,     'rspec/core/formatters/failure_list_formatter'
 
   # Register the formatter class
   # @param formatter_class [Class] formatter class to register
-  # @param notifications [Symbol, ...] one or more notifications to be
+  # @param notifications [Array<Symbol>] one or more notifications to be
   #   registered to the specified formatter
   #
   # @see RSpec::Core::Formatters::BaseFormatter
@@ -212,6 +214,8 @@ module RSpec::Core::Formatters
         JsonFormatter
       when 'bisect-drb'
         BisectDRbFormatter
+      when 'f', 'failures'
+        FailureListFormatter
       end
     end
 

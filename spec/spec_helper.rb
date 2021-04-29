@@ -91,6 +91,7 @@ RSpec.configure do |c|
 
   c.expect_with :rspec do |expectations|
     expectations.include_chain_clauses_in_custom_matcher_descriptions = true
+    expectations.max_formatted_output_length = 1000
   end
 
   c.mock_with :rspec do |mocks|
@@ -99,6 +100,16 @@ RSpec.configure do |c|
 
   c.around(:example, :simulate_shell_allowing_unquoted_ids) do |ex|
     with_env_vars('SHELL' => '/usr/local/bin/bash', &ex)
+  end
+
+  if ENV['CI'] && RSpec::Support::OS.windows? && RUBY_VERSION.to_f < 2.3
+    c.around(:example, :emits_warning_on_windows_on_old_ruby) do |ex|
+      ignoring_warnings(&ex)
+    end
+
+    c.define_derived_metadata(:pending_on_windows_old_ruby => true) do |metadata|
+      metadata[:pending] = "This example is expected to fail on windows, on ruby older than 2.3"
+    end
   end
 
   c.filter_run_excluding :ruby => lambda {|version|

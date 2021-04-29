@@ -1,4 +1,4 @@
-# This file was generated on 2019-01-03T20:34:23+00:00 from the rspec-dev repo.
+# This file was generated on 2021-04-23T09:17:21+01:00 from the rspec-dev repo.
 # DO NOT modify it by hand as your changes will get lost the next time it is generated.
 
 function is_mri {
@@ -9,6 +9,28 @@ function is_mri {
   else
     return 1
   fi;
+}
+
+function is_ruby_head {
+  # This checks for the presence of our CI's ruby-head env variable
+  if [ -z ${RUBY_HEAD+x} ]; then
+    return 1
+  else
+    return 0
+  fi;
+}
+
+function supports_cross_build_checks {
+  if is_mri; then
+    # We don't run cross build checks on ruby-head
+    if is_ruby_head; then
+      return 1
+    else
+      return 0
+    fi
+  else
+    return 1
+  fi
 }
 
 function is_jruby {
@@ -59,6 +81,22 @@ function is_mri_2plus {
 
 function is_ruby_23_plus {
   if ruby -e "exit(RUBY_VERSION.to_f >= 2.3)"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+function is_ruby_25_plus {
+  if ruby -e "exit(RUBY_VERSION.to_f >= 2.5)"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+function rspec_rails_compatible {
+  if is_ruby_25_plus; then
     return 0
   else
     return 1
